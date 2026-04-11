@@ -102,6 +102,20 @@ pub const NullStore = struct {
         _ = self;
     }
 
+    // ── Transactions (no-ops — in-memory operations are atomic) ──────────────
+
+    pub fn begin_txn(self: *NullStore) !void {
+        _ = self;
+    }
+
+    pub fn commit_txn(self: *NullStore) !void {
+        _ = self;
+    }
+
+    pub fn rollback_txn(self: *NullStore) void {
+        _ = self;
+    }
+
     // ── Accounts ─────────────────────────────────────────────────────────────
 
     pub fn get_account(self: *NullStore, account: *const [32]u8) ?AccountInfo {

@@ -89,29 +89,19 @@ VPS — can run a full node and contribute to network security.
 
 ---
 
-### Milestone 3 — Ledger & Block Validation
-**Goal:** Correct, pure-logic block validator and ledger coordinator.
+### ✅ Milestone 3 — Ledger & Block Validation
+**Completed.** All tests pass. Pure-logic validator, atomic inserter, pruner, ledger coordinator, and MPSC block processor.
 
-- [ ] `src/ledger/validator.zig` — `BlockValidator` (pure logic, zero I/O)
-  - Ed25519 signature over block hash
-  - PoW meets threshold (send/change ≠ receive/open thresholds)
-  - Previous block exists (or zero-hash for account open)
-  - Block not already in ledger (dedup)
-  - Balance ≥ 0 (no negative spend)
-  - No fork on previous block
-  - Pending entry exists and is unreceived (for receive blocks)
-  - Not the burn account
-  - Returns typed `BlockError` union — no strings, no I/O
-- [ ] `src/ledger/inserter.zig` — applies a validated block to the store in one SQLite transaction
-- [ ] `src/ledger/pruner.zig` — enforces `max_blocks_per_account`, never prunes below confirmation height
-- [ ] `src/ledger/block_processor.zig` — MPSC queue; worker thread drives `Ledger.process()`
-- [ ] `src/ledger/ledger.zig` — `Ledger` coordinates store + validator + inserter + pruner
-  - `process(block) !ProcessResult`
-  - `get_account_info(account) ?AccountInfo`
-  - `get_block(hash) ?StateBlock`
-  - `get_pending(account) []PendingInfo`
-  - `confirmation_height(account) u64`
-- [ ] Unit tests for every validation rule, every error path, pruning correctness
+Sub-steps:
+1. [x] Write `src/ledger/validator.zig` — pure block validation, typed `BlockError`, zero I/O
+2. [x] Write `src/ledger/inserter.zig` — apply validated block to store atomically
+3. [x] Write `src/ledger/pruner.zig` — enforce `max_blocks_per_account`, never prune below confirmation height
+4. [x] Write `src/ledger/ledger.zig` — coordinate validate + insert + prune
+5. [x] Write `src/ledger/block_processor.zig` — MPSC queue + worker thread
+6. [x] Update `src/main.zig` imports
+7. [x] Run `zig build test` — all green
+8. [x] `zig fmt src/` + final test run
+9. [x] Mark M3 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** All validation rules correctly accept and reject blocks.
 Pruner removes old blocks without corrupting the confirmation watermark.
@@ -121,18 +111,17 @@ Pruner removes old blocks without corrupting the confirmation watermark.
 ### Milestone 4 — Own Wire Protocol & Networking
 **Goal:** Connect to smallnano peers using the project's own message format.
 
-- [ ] `src/network/message.zig` — own message format:
-  - Header: magic `0x534E`, network byte, version u8, message type u8, body length u32
-  - Message types: `Handshake`, `Keepalive`, `Publish`, `VoteBy`, `PullReq`, `PullAck`, `Telemetry`
-  - All integers little-endian
-  - Encode/decode for every message type
-- [ ] `src/network/handshake.zig` — Node-ID cookie/challenge handshake (Ed25519)
-- [ ] `src/network/channel.zig` — non-blocking TCP read/write with frame buffering
-- [ ] `src/network/bandwidth.zig` — token-bucket rate limiter (configurable mbps)
-- [ ] `src/network/peer.zig` — peer state, last-seen, ban list
-- [ ] `src/network/network.zig` — accept loop, outbound dialer, peer set (bounded by `max_peers`)
-- [ ] Peer exclusion for malformed messages / protocol violations
-- [ ] Unit tests: encode/decode round-trips for every message type, bandwidth limiter
+Sub-steps:
+1. [ ] Write `src/network/message.zig` — encode/decode all message types (magic `0x534E`, LE integers)
+2. [ ] Write `src/network/handshake.zig` — Node-ID cookie/challenge handshake (Ed25519)
+3. [ ] Write `src/network/channel.zig` — TCP read/write with length-prefixed frame buffering
+4. [ ] Write `src/network/bandwidth.zig` — token-bucket rate limiter (configurable mbps)
+5. [ ] Write `src/network/peer.zig` — peer state, last-seen, ban list
+6. [ ] Write `src/network/network.zig` — accept loop, outbound dialer, bounded peer set
+7. [ ] Update `src/main.zig` imports
+8. [ ] Run `zig build test` — fix until green
+9. [ ] `zig fmt src/` + final test run
+10. [ ] Mark M4 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** Two dev-network nodes can connect, complete handshake, exchange
 keepalives and Publish messages.
@@ -142,20 +131,16 @@ keepalives and Publish messages.
 ### Milestone 5 — Consensus (Weighted Voting)
 **Goal:** Participate in weighted representative voting for block confirmation.
 
-- [ ] `src/consensus/rep_weights.zig` — in-memory representative weight cache, built from confirmed ledger
-- [ ] `src/consensus/election.zig` — `Election` state machine (pure logic)
-  - Accumulates votes per candidate block
-  - Quorum: `tallied_weight * 3 >= online_weight * 2` (integer, no floats)
-  - Detects forks (conflicting blocks for same root)
-  - Returns `.ongoing`, `.confirmed { winner }`, or `.fork`
-- [ ] `src/consensus/vote_processor.zig` — validates incoming votes, routes to elections
-  - Ed25519 signature over `Blake2b(hash_list || timestamp)`
-  - Deduplication by `(rep, timestamp)`
-  - Weight lookup from cache
-- [ ] `src/consensus/active_elections.zig` — bounded container (`max_pending_elections`)
-  - Evicts lowest-priority when full
-- [ ] `src/consensus/confirmation.zig` — writes `confirmation_height` when quorum reached
-- [ ] Unit tests: quorum detection, fork detection, vote deduplication, eviction policy
+Sub-steps:
+1. [ ] Write `src/consensus/rep_weights.zig` — in-memory weight cache built from confirmed ledger
+2. [ ] Write `src/consensus/election.zig` — election state machine (pure logic, quorum integer math)
+3. [ ] Write `src/consensus/vote_processor.zig` — validate + deduplicate + route votes
+4. [ ] Write `src/consensus/active_elections.zig` — bounded elections container with eviction
+5. [ ] Write `src/consensus/confirmation.zig` — write `confirmation_height` on quorum
+6. [ ] Update `src/main.zig` imports
+7. [ ] Run `zig build test` — fix until green
+8. [ ] `zig fmt src/` + final test run
+9. [ ] Mark M5 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** On a two-node devnet, a published block reaches confirmed state
 and cementation height advances monotonically.
@@ -165,14 +150,13 @@ and cementation height advances monotonically.
 ### Milestone 6 — Bootstrap
 **Goal:** Sync a pruned ledger from peers on first start.
 
-- [ ] `src/bootstrap/server.zig` — serves blocks in response to `PullReq`
-  - Respects local pruning watermark (won't serve pruned blocks)
-- [ ] `src/bootstrap/client.zig` — requests missing blocks via `PullReq` / `PullAck`
-  - Frontier scan: discovers which accounts need syncing
-  - Only requests down to `max_blocks_per_account` from tip (no deeper)
-  - Progress persisted in SQLite; resumes after restart
-  - Respects `bandwidth_limit_mbps`
-- [ ] Unit tests: mock peer, client correctly inserts received blocks
+Sub-steps:
+1. [ ] Write `src/bootstrap/server.zig` — serve blocks in response to `PullReq`, respect pruning watermark
+2. [ ] Write `src/bootstrap/client.zig` — frontier scan, `PullReq`/`PullAck`, resume on restart
+3. [ ] Update `src/main.zig` imports
+4. [ ] Run `zig build test` — fix until green
+5. [ ] `zig fmt src/` + final test run
+6. [ ] Mark M6 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** A fresh node can sync a dev-network ledger from genesis.
 Pruned accounts handled without errors.
@@ -182,14 +166,12 @@ Pruned accounts handled without errors.
 ### Milestone 7 — Wallet & Key Management
 **Goal:** Generate accounts, sign blocks, send and receive smn.
 
-- [ ] `src/wallet/wallet.zig`
-  - Deterministic key derivation: `seed → index → (secret, public)` via Blake2b
-  - Encrypted key storage in SQLite (AES-256-GCM, Argon2id key derivation)
-  - `create_send(from, to, amount) !StateBlock`
-  - `create_receive(account, pending_hash) !StateBlock`
-  - `change_representative(account, new_rep) !StateBlock`
-  - Work generation integrated (CPU, `work_threads` from config)
-- [ ] Unit tests: key derivation vectors, block signing, work validation
+Sub-steps:
+1. [ ] Write `src/wallet/wallet.zig` — deterministic key derivation, encrypted storage, block builders
+2. [ ] Update `src/main.zig` imports
+3. [ ] Run `zig build test` — fix until green
+4. [ ] `zig fmt src/` + final test run
+5. [ ] Mark M7 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** Can generate a keypair, receive smn (devnet), and send smn (devnet)
 using only the CLI.
@@ -199,22 +181,13 @@ using only the CLI.
 ### Milestone 8 — JSON-RPC API
 **Goal:** Minimal HTTP JSON-RPC surface for wallets and integrations.
 
-- [ ] `src/rpc/server.zig` — single-threaded HTTP/1.1 server (no external lib)
-- [ ] `src/rpc/handlers.zig` — implemented commands:
-  - `account_balance` — returns balance and pending amount
-  - `account_info` — frontier, height, representative, confirmation height
-  - `account_history` — returns blocks, honours `max_blocks_per_account`
-  - `accounts_pending` — list receivable amounts
-  - `block_info` — single block lookup by hash
-  - `process` — submit a pre-built signed block
-  - `send` — wallet convenience (build + sign + submit)
-  - `receive` — claim a pending amount
-  - `wallet_create`, `wallet_list`, `wallet_add_key`
-  - `representatives` — list known representatives and their weights
-  - `telemetry` — node stats: peers, block count, pruning depth, version
-  - `version` — node version and network name
-  - `peers` — connected peer list
-- [ ] Unit tests for each handler using `null_store`
+Sub-steps:
+1. [ ] Write `src/rpc/server.zig` — single-threaded HTTP/1.1 server, no external lib
+2. [ ] Write `src/rpc/handlers.zig` — all RPC commands (`account_info`, `process`, `send`, `receive`, etc.)
+3. [ ] Update `src/main.zig` imports
+4. [ ] Run `zig build test` — fix until green
+5. [ ] `zig fmt src/` + final test run
+6. [ ] Mark M8 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** An HTTP client can query balances and submit transactions.
 
@@ -223,12 +196,14 @@ using only the CLI.
 ### Milestone 9 — Configuration & CLI
 **Goal:** A friendly, well-documented operator experience.
 
-- [ ] `src/config.zig` — `NodeConfig` parsed from TOML + CLI flags
-- [ ] Config file auto-generated with defaults and inline comments on first run
-- [ ] All configurable parameters (see CLAUDE.md table)
-- [ ] `--help` output with descriptions for every flag
-- [ ] Graceful shutdown on SIGINT / SIGTERM
-- [ ] Unit tests: config parsing, invalid values, missing fields
+Sub-steps:
+1. [ ] Write `src/config.zig` — `NodeConfig` parsed from TOML + CLI flags, all parameters
+2. [ ] Auto-generate config file with defaults and inline comments on first run
+3. [ ] `--help` output for every flag
+4. [ ] Graceful shutdown on SIGINT / SIGTERM
+5. [ ] Run `zig build test` — fix until green
+6. [ ] `zig fmt src/` + final test run
+7. [ ] Mark M9 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** A non-technical user edits one TOML file to configure their node.
 All limits enforce the memory and disk targets.
@@ -238,21 +213,15 @@ All limits enforce the memory and disk targets.
 ### Milestone 10 — Hardening, CI & Release
 **Goal:** Production-quality binary with automated quality gates.
 
-- [ ] GitHub Actions CI:
-  - `zig build test` on every PR (Linux x86_64, Linux aarch64, macOS arm64)
-  - `zig fmt --check src/` enforced
-  - Memory leak detection via `std.testing.allocator` fails the build
-- [ ] Fuzz targets for block deserialisation and message parsing
-- [ ] Integration test: 3-node devnet, send a transaction, verify confirmation on all nodes
-- [ ] Benchmark: blocks/second insertion rate, peak RSS under load — must meet targets
-- [ ] Release binaries:
-  - `x86_64-linux-musl` (static, runs on any Linux)
-  - `aarch64-linux-musl` (Raspberry Pi, ARM servers)
-  - `x86_64-macos`
-  - `aarch64-macos` (Apple Silicon)
-- [ ] Docker image (scratch-based, < 15 MB compressed)
-- [ ] Systemd unit file and one-command install script
-- [ ] Project website with single-page explainer and download links
+Sub-steps:
+1. [ ] GitHub Actions CI: `zig build test` on Linux x86_64, aarch64, macOS arm64 + `zig fmt --check`
+2. [ ] Fuzz targets for block deserialisation and message parsing
+3. [ ] Integration test: 3-node devnet, send a transaction, verify confirmation on all nodes
+4. [ ] Benchmark: blocks/second insertion rate and peak RSS — must meet resource targets
+5. [ ] Release binaries: `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, `aarch64-macos`
+6. [ ] Docker image (scratch-based, < 15 MB compressed)
+7. [ ] Systemd unit file and one-command install script
+8. [ ] Project website with single-page explainer and download links
 
 **Exit criteria:** `curl -fsSL install.sh | sh` installs smallnano on a fresh
 Ubuntu 22.04 VM. Node runs at ≤ 64 MB RAM idle after sync. Any Raspberry Pi Zero 2

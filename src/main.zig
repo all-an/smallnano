@@ -19,6 +19,11 @@ comptime {
     _ = @import("store/store.zig");
     _ = @import("store/null_store.zig");
     _ = @import("store/sqlite_store.zig");
+    _ = @import("ledger/validator.zig");
+    _ = @import("ledger/inserter.zig");
+    _ = @import("ledger/pruner.zig");
+    _ = @import("ledger/ledger.zig");
+    _ = @import("ledger/block_processor.zig");
 }
 
 pub fn main() !void {

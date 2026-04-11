@@ -79,6 +79,20 @@ pub const SqliteStore = struct {
         }
     }
 
+    // ── Transactions ──────────────────────────────────────────────────────────
+
+    pub fn begin_txn(self: *SqliteStore) SqliteError!void {
+        try self.exec("BEGIN");
+    }
+
+    pub fn commit_txn(self: *SqliteStore) SqliteError!void {
+        try self.exec("COMMIT");
+    }
+
+    pub fn rollback_txn(self: *SqliteStore) void {
+        _ = c.sqlite3_exec(self.db, "ROLLBACK", null, null, null);
+    }
+
     /// Run pending schema migrations. Each migration is idempotent and atomic.
     pub fn migrate(self: *SqliteStore) SqliteError!void {
         // Create the meta table first so we can read schema_version.
