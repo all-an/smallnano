@@ -173,6 +173,24 @@ pub const SqliteStore = struct {
         return row;
     }
 
+    pub fn get_block_by_height(self: *SqliteStore, account: *const [32]u8, height: u64) ?BlockRow {
+        const sql = "SELECT account,block,height FROM blocks WHERE account=?1 AND height=?2";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return null;
+        defer _ = c.sqlite3_finalize(stmt);
+
+        _ = c.sqlite3_bind_blob(stmt, 1, account, 32, c.SQLITE_STATIC);
+        _ = c.sqlite3_bind_int64(stmt, 2, @intCast(height));
+        if (c.sqlite3_step(stmt) != c.SQLITE_ROW) return null;
+
+        var row: BlockRow = undefined;
+        row.account = blob32(stmt, 0);
+        const blob_ptr: [*]const u8 = @ptrCast(c.sqlite3_column_blob(stmt, 1));
+        @memcpy(&row.block_bytes, blob_ptr[0..216]);
+        row.height = @intCast(c.sqlite3_column_int64(stmt, 2));
+        return row;
+    }
+
     pub fn put_block(self: *SqliteStore, hash: *const [32]u8, row: BlockRow) SqliteError!void {
         const sql =
             \\INSERT OR IGNORE INTO blocks (hash,account,block,height)
@@ -655,6 +673,29 @@ test "sqlite_store: put_block is idempotent (INSERT OR IGNORE)" {
     try s.put_block(&hash, row);
     try s.put_block(&hash, row); // should not error or duplicate
     try std.testing.expectEqual(@as(u64, 1), s.get_account_block_count(&account));
+}
+
+test "sqlite_store: get_block_by_height returns matching row" {
+    var path_buf: [64]u8 = undefined;
+    const path = tmp_db_path(&path_buf);
+    defer std.fs.deleteFileAbsolute(path) catch {};
+    var s = SqliteStore.init(std.testing.allocator);
+    defer s.deinit();
+    try s.open(path);
+    try s.migrate();
+
+    const account = [_]u8{0x71} ** 32;
+    const hash = [_]u8{0x72} ** 32;
+    try s.put_block(&hash, .{
+        .account = account,
+        .block_bytes = [_]u8{0x33} ** 216,
+        .height = 4,
+    });
+
+    const row = s.get_block_by_height(&account, 4).?;
+    try std.testing.expectEqual(account, row.account);
+    try std.testing.expectEqual(@as(u64, 4), row.height);
+    try std.testing.expectEqual(@as(u8, 0x33), row.block_bytes[0]);
 }
 
 test "sqlite_store: delete_blocks_below" {

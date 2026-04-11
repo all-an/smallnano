@@ -49,10 +49,10 @@ zig build run -- node run --network=dev --max-blocks-per-account=500
 | M2 — Storage layer (SQLite) | ✅ Done |
 | M3 — Ledger & block validation | ✅ Done |
 | M4 — Wire protocol & networking | ✅ Done |
-| M5 — Consensus (weighted voting) | pending |
-| M6 — Bootstrap | pending |
-| M7 — Wallet & key management | pending |
-| M8 — JSON-RPC API | pending |
+| M5 — Consensus (weighted voting) | ✅ Done |
+| M6 — Bootstrap | ✅ Done |
+| M7 — Wallet & key management | ✅ Done |
+| M8 — JSON-RPC API | ✅ Done |
 | M9 — Configuration & CLI | pending |
 | M10 — Hardening & CI | pending |
 

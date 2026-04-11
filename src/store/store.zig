@@ -20,6 +20,7 @@
 ///
 ///   -- Blocks --
 ///   get_block(hash: *const [32]u8) ?BlockRow
+///   get_block_by_height(account: *const [32]u8, height: u64) ?BlockRow
 ///   put_block(hash: *const [32]u8, row: BlockRow) !void
 ///   get_account_block_count(account: *const [32]u8) u64
 ///   delete_blocks_below(account: *const [32]u8, height: u64) !u64

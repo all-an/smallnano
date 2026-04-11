@@ -144,66 +144,66 @@ keepalives and Publish messages.
 
 ---
 
-### Milestone 5 — Consensus (Weighted Voting)
-**Goal:** Participate in weighted representative voting for block confirmation.
+### ✅ Milestone 5 — Consensus (Weighted Voting)
+**Completed.** All tests pass. Representative weight cache, election state machine, active election container, vote processor, and confirmation tracker are implemented and covered by unit tests.
 
 Sub-steps:
-1. [ ] Write `src/consensus/rep_weights.zig` — in-memory weight cache built from confirmed ledger
-2. [ ] Write `src/consensus/election.zig` — election state machine (pure logic, quorum integer math)
-3. [ ] Write `src/consensus/vote_processor.zig` — validate + deduplicate + route votes
-4. [ ] Write `src/consensus/active_elections.zig` — bounded elections container with eviction
-5. [ ] Write `src/consensus/confirmation.zig` — write `confirmation_height` on quorum
-6. [ ] Update `src/main.zig` imports
-7. [ ] Run `zig build test` — fix until green
-8. [ ] `zig fmt src/` + final test run
-9. [ ] Mark M5 ✅ in ROADMAP.md, commit, push
+1. [x] Write `src/consensus/rep_weights.zig` — in-memory weight cache built from confirmed ledger
+2. [x] Write `src/consensus/election.zig` — election state machine (pure logic, quorum integer math)
+3. [x] Write `src/consensus/vote_processor.zig` — validate + deduplicate + route votes
+4. [x] Write `src/consensus/active_elections.zig` — bounded elections container with eviction
+5. [x] Write `src/consensus/confirmation.zig` — write `confirmation_height` on quorum
+6. [x] Update `src/main.zig` imports
+7. [x] Run `zig build test` — fix until green
+8. [x] `zig fmt src/` + final test run
+9. [x] Mark M5 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** On a two-node devnet, a published block reaches confirmed state
 and cementation height advances monotonically.
 
 ---
 
-### Milestone 6 — Bootstrap
-**Goal:** Sync a pruned ledger from peers on first start.
+### ✅ Milestone 6 — Bootstrap
+**Completed.** All tests pass. Bootstrap frontier scan, `PullReq` servicing, bounded `PullAck` windows, pruning-watermark enforcement, and client-side replay/resume are implemented and covered by unit tests.
 
 Sub-steps:
-1. [ ] Write `src/bootstrap/server.zig` — serve blocks in response to `PullReq`, respect pruning watermark
-2. [ ] Write `src/bootstrap/client.zig` — frontier scan, `PullReq`/`PullAck`, resume on restart
-3. [ ] Update `src/main.zig` imports
-4. [ ] Run `zig build test` — fix until green
-5. [ ] `zig fmt src/` + final test run
-6. [ ] Mark M6 ✅ in ROADMAP.md, commit, push
+1. [x] Write `src/bootstrap/server.zig` — serve blocks in response to `PullReq`, respect pruning watermark
+2. [x] Write `src/bootstrap/client.zig` — frontier scan, `PullReq`/`PullAck`, resume on restart
+3. [x] Update `src/main.zig` imports
+4. [x] Run `zig build test` — fix until green
+5. [x] `zig fmt src/` + final test run
+6. [x] Mark M6 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** A fresh node can sync a dev-network ledger from genesis.
 Pruned accounts handled without errors.
 
 ---
 
-### Milestone 7 — Wallet & Key Management
-**Goal:** Generate accounts, sign blocks, send and receive smn.
+### ✅ Milestone 7 — Wallet & Key Management
+**Completed.** All tests pass. Deterministic account derivation, encrypted seed storage, wallet locking/unlocking, and send/open-receive block builders are implemented and covered by unit tests.
 
 Sub-steps:
-1. [ ] Write `src/wallet/wallet.zig` — deterministic key derivation, encrypted storage, block builders
-2. [ ] Update `src/main.zig` imports
-3. [ ] Run `zig build test` — fix until green
-4. [ ] `zig fmt src/` + final test run
-5. [ ] Mark M7 ✅ in ROADMAP.md, commit, push
+1. [x] Write `src/wallet/wallet.zig` — deterministic key derivation, encrypted storage, block builders
+2. [x] Update `src/main.zig` imports
+3. [x] Run `zig build test` — fix until green
+4. [x] `zig fmt src/` + final test run
+5. [x] Mark M7 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** Can generate a keypair, receive smn (devnet), and send smn (devnet)
 using only the CLI.
 
 ---
 
-### Milestone 8 — JSON-RPC API
-**Goal:** Minimal HTTP JSON-RPC surface for wallets and integrations.
+### ✅ Milestone 8 — JSON-RPC API
+**Completed.** All tests pass. A minimal HTTP/1.1 JSON-RPC server and handler layer are implemented, including wallet lock/unlock, account creation, account and pending queries, and transaction submission (`process`, `send`, `receive`) with unit tests for both JSON dispatch and raw HTTP request handling.
 
 Sub-steps:
-1. [ ] Write `src/rpc/server.zig` — single-threaded HTTP/1.1 server, no external lib
-2. [ ] Write `src/rpc/handlers.zig` — all RPC commands (`account_info`, `process`, `send`, `receive`, etc.)
-3. [ ] Update `src/main.zig` imports
-4. [ ] Run `zig build test` — fix until green
-5. [ ] `zig fmt src/` + final test run
-6. [ ] Mark M8 ✅ in ROADMAP.md, commit, push
+1. [x] Write `src/rpc/server.zig` — single-threaded HTTP/1.1 server, no external lib
+2. [x] Write `src/rpc/handlers.zig` — all RPC commands (`account_info`, `process`, `send`, `receive`, etc.)
+3. [x] Update `src/main.zig` imports
+4. [x] Run `zig build test` — fix until green
+5. [x] `zig fmt src/` + final test run
+6. [x] Mark M8 ✅ in ROADMAP.md, commit, push
 
 **Exit criteria:** An HTTP client can query balances and submit transactions.
 

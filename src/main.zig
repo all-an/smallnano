@@ -30,6 +30,16 @@ comptime {
     _ = @import("network/bandwidth.zig");
     _ = @import("network/peer.zig");
     _ = @import("network/network.zig");
+    _ = @import("consensus/rep_weights.zig");
+    _ = @import("consensus/election.zig");
+    _ = @import("consensus/active_elections.zig");
+    _ = @import("consensus/confirmation.zig");
+    _ = @import("consensus/vote_processor.zig");
+    _ = @import("bootstrap/server.zig");
+    _ = @import("bootstrap/client.zig");
+    _ = @import("wallet/wallet.zig");
+    _ = @import("rpc/handlers.zig");
+    _ = @import("rpc/server.zig");
 }
 
 pub fn main() !void {

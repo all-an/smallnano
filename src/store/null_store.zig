@@ -132,6 +132,16 @@ pub const NullStore = struct {
         return self.blocks.get(hash.*);
     }
 
+    pub fn get_block_by_height(self: *NullStore, account: *const [32]u8, height: u64) ?BlockRow {
+        var it = self.blocks.valueIterator();
+        while (it.next()) |row| {
+            if (std.mem.eql(u8, &row.account, account) and row.height == height) {
+                return row.*;
+            }
+        }
+        return null;
+    }
+
     pub fn put_block(self: *NullStore, hash: *const [32]u8, row: BlockRow) !void {
         try self.blocks.put(hash.*, row);
     }
@@ -331,6 +341,23 @@ test "null_store: block put, get, count" {
     try std.testing.expect(s.get_block(&hash1) != null);
     try std.testing.expect(s.get_block(&hash2) != null);
     try std.testing.expectEqual(@as(u64, 2), s.get_account_block_count(&account));
+}
+
+test "null_store: get_block_by_height returns matching block" {
+    var s = NullStore.init(std.testing.allocator);
+    defer s.deinit();
+
+    const account = [_]u8{0x10} ** 32;
+    const hash1 = [_]u8{0x31} ** 32;
+    const hash2 = [_]u8{0x32} ** 32;
+
+    try s.put_block(&hash1, .{ .account = account, .block_bytes = [_]u8{0x11} ** 216, .height = 1 });
+    try s.put_block(&hash2, .{ .account = account, .block_bytes = [_]u8{0x22} ** 216, .height = 2 });
+
+    const row = s.get_block_by_height(&account, 2).?;
+    try std.testing.expectEqual(account, row.account);
+    try std.testing.expectEqual(@as(u64, 2), row.height);
+    try std.testing.expectEqual(@as(u8, 0x22), row.block_bytes[0]);
 }
 
 test "null_store: delete_blocks_below removes correct blocks" {
