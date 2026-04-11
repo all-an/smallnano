@@ -52,6 +52,21 @@ VPS — can run a full node and contribute to network security.
 
 ---
 
+## Supply Distribution
+
+Total fixed supply: **10,000,000 smn** — minted in the genesis block, no inflation ever.
+
+| Allocation | Amount | Purpose |
+|------------|--------|---------|
+| Development fund | 50,000 smn | Protocol development, infrastructure, tooling |
+| Airdrops & faucet game | 9,950,000 smn | Community distribution — earned, not bought |
+
+**No ICO. No pre-sale. No investors.**
+The vast majority of supply reaches users through airdrops and a faucet game, keeping
+distribution fair and decentralised from day one.
+
+---
+
 ## Milestones
 
 ### ✅ Milestone 1 — Core Types & Cryptography
