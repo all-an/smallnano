@@ -24,15 +24,19 @@ comptime {
     _ = @import("ledger/pruner.zig");
     _ = @import("ledger/ledger.zig");
     _ = @import("ledger/block_processor.zig");
+    _ = @import("network/message.zig");
+    _ = @import("network/handshake.zig");
+    _ = @import("network/channel.zig");
+    _ = @import("network/bandwidth.zig");
+    _ = @import("network/peer.zig");
+    _ = @import("network/network.zig");
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    _ = allocator;
+    _ = gpa.allocator();
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("smallnano v0.1.0 — not yet implemented\n");
+    std.log.err("smallnano v0.1.0 — node not yet implemented", .{});
     std.process.exit(1);
 }

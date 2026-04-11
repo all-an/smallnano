@@ -48,7 +48,7 @@ zig build run -- node run --network=dev --max-blocks-per-account=500
 | M1 — Core types & cryptography | ✅ Done |
 | M2 — Storage layer (SQLite) | ✅ Done |
 | M3 — Ledger & block validation | ✅ Done |
-| M4 — Wire protocol & networking | pending |
+| M4 — Wire protocol & networking | ✅ Done |
 | M5 — Consensus (weighted voting) | pending |
 | M6 — Bootstrap | pending |
 | M7 — Wallet & key management | pending |
