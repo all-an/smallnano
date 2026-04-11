@@ -59,7 +59,7 @@ fn worker_thread(state: *WorkerState) void {
 
 /// Generate a valid proof-of-work nonce for `block_hash` at `threshold`.
 /// Uses up to `thread_count` CPU threads. Blocks until a solution is found.
-/// Pass `thread_count = 1` for single-threaded operation (Raspberry Pi default).
+/// Pass `thread_count = 1` for single-threaded operation on low-end computers.
 pub fn generate(
     block_hash: *const [32]u8,
     threshold: u64,

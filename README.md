@@ -2,7 +2,7 @@
 
 A lightweight block-lattice cryptocurrency written in Zig.
 
-Inspired by Nano's ideas (zero fees, instant finality, no mining) but built as an independent network with its own protocol, address format, and coin. Designed to run on a Raspberry Pi or a $5 VPS.
+Inspired by Nano's ideas (zero fees, instant finality, no mining) but built as an independent network with its own protocol, address format, and coin. Designed to run on a low-end computer or a $5 VPS.
 
 ## Goals
 

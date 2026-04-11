@@ -7,7 +7,7 @@ protocol, network, address format, and coin.
 **The problem we solve:** Full nodes for block-lattice cryptocurrencies are too heavy.
 Running a Nano node costs ~$40/month on a cloud VPS, requires 8 GB RAM, and hundreds
 of GB of disk. That centralises the network to whoever can afford it. smallnano is
-designed so that anyone in the world — with a Raspberry Pi, an old laptop, or a $5
+designed so that anyone in the world — with a low-end computer, an old laptop, or a $5
 VPS — can run a full node and contribute to network security.
 
 ---
@@ -240,7 +240,7 @@ Sub-steps:
 8. [ ] Project website with single-page explainer and download links
 
 **Exit criteria:** `curl -fsSL install.sh | sh` installs smallnano on a fresh
-Ubuntu 22.04 VM. Node runs at ≤ 64 MB RAM idle after sync. Any Raspberry Pi Zero 2
+Ubuntu 22.04 VM. Node runs at ≤ 64 MB RAM idle after sync. Any low-end computer
 can run a full node continuously.
 
 ---

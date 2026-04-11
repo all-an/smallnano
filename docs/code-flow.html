@@ -684,7 +684,7 @@
         CPU brute-force using <code>threads</code> workers (each tries random nonces).
         Computes Blake2b-64(<code>nonce_le ++ hash</code>) until result ≥ threshold.
         Workers share a <code>std.atomic.Value(bool)</code> "found" flag; the winner
-        stores the nonce atomically. ~2–5 seconds on a Raspberry Pi Zero 2 for a send block.
+        stores the nonce atomically. ~2–5 seconds on a low-end computer for a send block.
       </div>
     </div>
 

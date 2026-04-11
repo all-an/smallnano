@@ -12,7 +12,7 @@ and its own design priorities.
 
 **Core philosophy:**
 - Any person in the world must be able to run a full node on cheap hardware
-  (Raspberry Pi, $5 VPS, old laptop)
+  (low-end computer, $5 VPS, old laptop)
 - Configurable ledger depth per operator — trade storage for history
 - Zero fees, instant finality via block-lattice + weighted voting
 - One binary, no daemons, no dependencies to install
