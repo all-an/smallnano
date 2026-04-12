@@ -253,6 +253,9 @@ can run a full node continuously.
 ---
 
 ### Milestone 11 — Node Runtime Wiring
+**Completed.** The node runtime now owns store open/migrate, genesis bootstrap,
+block processing, network bring-up, RPC bring-up, and coordinated shutdown.
+
 **Goal:** Turn the current module set into a real long-running node process.
 
 Sub-steps:
@@ -260,9 +263,9 @@ Sub-steps:
 2. [x] Replace the placeholder wait loop in `src/main.zig` with real startup, shutdown, and error propagation
 3. [x] Wire genesis initialization, database open/migrate, and background worker startup in one runtime path
 4. [x] Expose a small internal API for publishing blocks, starting elections, and forwarding confirmations between subsystems
-5. [ ] Add unit tests for clean startup/shutdown ordering and subsystem failure handling
-6. [ ] Run `zig build test` — fix until green
-7. [ ] `zig fmt src/` + final test run
+5. [x] Add unit tests for clean startup/shutdown ordering and subsystem failure handling
+6. [x] Run `zig build test` — fix until green
+7. [x] `zig fmt src/` + final test run
 
 **Exit criteria:** `smallnano node run` starts a real node instance, opens its
 store, brings up networking/RPC workers, and shuts down cleanly without leaking
@@ -274,17 +277,19 @@ threads or state.
 **Goal:** Make multiple nodes discover each other, exchange live traffic, and sync without manual code changes.
 
 Sub-steps:
-1. [ ] Extend `src/network/network.zig` with outbound publish, vote, keepalive, and bootstrap request relay paths
-2. [ ] Track active peer channels so the node can broadcast or target messages after handshake completion
-3. [ ] Extend `src/config.zig` with peer-seed, bootstrap-peer, listen-address, external-address, and data-dir settings
-4. [ ] Persist peer discovery state safely and bound retry/backoff behavior for low-resource machines
-5. [ ] Add tests covering outbound relay, peer selection, bootstrap resume, and config parsing/validation
-6. [ ] Run `zig build test` — fix until green
-7. [ ] `zig fmt src/` + final test run
+1. [x] Extend `src/network/network.zig` with outbound publish, vote, keepalive, and bootstrap request relay paths
+2. [x] Track active peer channels so the node can broadcast or target messages after handshake completion
+3. [x] Extend `src/config.zig` with peer-seed, bootstrap-peer, listen-address, external-address, and data-dir settings
+4. [x] Bring up the RPC worker as part of the real long-running node runtime and coordinate network + RPC + owned subsystem start/stop in one live path
+5. [ ] Persist peer discovery state safely and bound retry/backoff behavior for low-resource machines
+6. [ ] Add tests covering outbound relay, peer selection, bootstrap resume, config parsing/validation, and coordinated runtime start/stop
+7. [ ] Run `zig build test` — fix until green
+8. [ ] `zig fmt src/` + final test run
 
 **Exit criteria:** Three separately configured nodes can discover peers, relay
 blocks and votes outward, and bootstrap ledger state from each other on a
-devnet.
+devnet. The real runtime brings up network and RPC workers together and shuts
+them down cleanly through the same node-owned lifecycle.
 
 ---
 

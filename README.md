@@ -45,7 +45,7 @@ zig build run -- node run --network=main
 zig build run -- node run --network=dev --max-blocks-per-account=500
 ```
 
-Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, and shuts down cleanly, but the full multi-node runtime is still not wired together yet. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
+Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, and starts/stops the owned network and RPC workers cleanly. Multi-node peer persistence, bootstrap policy, and final devnet validation are still pending. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
 
 ## Status
 
@@ -61,8 +61,8 @@ Current runtime note: the binary now loads config, initializes the node runtime,
 | M8 — JSON-RPC API | module-complete, integration pending |
 | M9 — Configuration & CLI | config complete, runtime pending |
 | M10 — Hardening & CI | in progress |
-| M11 — Node runtime wiring | in progress |
-| M12 — Peer relay & bootstrap config | pending |
+| M11 — Node runtime wiring | ✅ Done |
+| M12 — Peer relay & bootstrap config | in progress |
 | M13 — Multi-node devnet validation | pending |
 
 See [ROADMAP.md](ROADMAP.md) for full details.

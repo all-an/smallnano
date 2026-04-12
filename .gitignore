@@ -1,4 +1,7 @@
 .zig-cache/
+.zig-cache-*/
+.zig-global/
+.zig-global-*/
 zig-out/
 *.o
 

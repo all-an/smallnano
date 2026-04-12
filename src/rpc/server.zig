@@ -24,44 +24,71 @@ pub fn RpcServer(comptime HandlerType: type) type {
 
         allocator: std.mem.Allocator,
         handlers: *HandlerType,
+        listen_address: []const u8,
         listen_port: u16,
         max_request_size: usize,
         stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        thread: ?std.Thread = null,
 
         pub fn init(
             allocator: std.mem.Allocator,
             handlers: *HandlerType,
+            listen_address: []const u8,
             listen_port: u16,
             max_request_size: usize,
         ) Self {
             return .{
                 .allocator = allocator,
                 .handlers = handlers,
+                .listen_address = listen_address,
                 .listen_port = listen_port,
                 .max_request_size = max_request_size,
             };
+        }
+
+        pub fn start(self: *Self) !void {
+            if (self.thread != null) return;
+            self.stop.store(false, .release);
+            self.thread = try std.Thread.spawn(.{}, accept_loop_thread, .{self});
         }
 
         pub fn request_stop(self: *Self) void {
             self.stop.store(true, .release);
         }
 
+        pub fn stop_and_join(self: *Self) void {
+            self.request_stop();
+            if (self.thread) |thread| {
+                thread.join();
+                self.thread = null;
+            }
+        }
+
         /// Accept and serve HTTP requests until `request_stop()` is called.
         pub fn accept_loop(self: *Self) void {
-            const addr = std.net.Address.parseIp("0.0.0.0", self.listen_port) catch |err| {
+            const addr = std.net.Address.parseIp(self.listen_address, self.listen_port) catch |err| {
                 std.log.err("rpc: failed to parse listen address: {}", .{err});
                 return;
             };
-            var server = addr.listen(.{ .reuse_address = true }) catch |err| {
+            var server = addr.listen(.{
+                .reuse_address = true,
+                .force_nonblocking = true,
+            }) catch |err| {
                 std.log.err("rpc: failed to listen on port {d}: {}", .{ self.listen_port, err });
                 return;
             };
             defer server.deinit();
 
-            std.log.info("rpc: listening on port {d}", .{self.listen_port});
+            std.log.info("rpc: listening on {s}:{d}", .{ self.listen_address, self.listen_port });
 
             while (!self.stop.load(.acquire)) {
-                const conn = server.accept() catch continue;
+                const conn = server.accept() catch |err| switch (err) {
+                    error.WouldBlock => {
+                        std.Thread.sleep(20 * std.time.ns_per_ms);
+                        continue;
+                    },
+                    else => continue,
+                };
                 self.handle_connection(conn) catch |err| {
                     std.log.warn("rpc: request failed: {}", .{err});
                 };
@@ -75,14 +102,12 @@ pub fn RpcServer(comptime HandlerType: type) type {
             defer self.allocator.free(request);
 
             const response = self.handle_http_request(self.allocator, request) catch |err| switch (err) {
-                HttpError.MethodNotAllowed => try http_response(self.allocator, 405, "Method Not Allowed", "{\"error\":\"MethodNotAllowed\"}"),
-                HttpError.ContentLengthRequired => try http_response(self.allocator, 411, "Length Required", "{\"error\":\"ContentLengthRequired\"}"),
-                HttpError.InvalidContentLength,
-                HttpError.InvalidHttpRequest,
-                HttpError.RequestBodyTruncated,
+                error.MethodNotAllowed => try http_response(self.allocator, 405, "Method Not Allowed", "{\"error\":\"MethodNotAllowed\"}"),
+                error.ContentLengthRequired => try http_response(self.allocator, 411, "Length Required", "{\"error\":\"ContentLengthRequired\"}"),
+                error.InvalidContentLength,
+                error.InvalidHttpRequest,
+                error.RequestBodyTruncated,
                 => try http_response(self.allocator, 400, "Bad Request", "{\"error\":\"InvalidHttpRequest\"}"),
-                HttpError.RequestTooLarge => try http_response(self.allocator, 413, "Payload Too Large", "{\"error\":\"RequestTooLarge\"}"),
-                HttpError.ConnectionClosed => return err,
                 else => return err,
             };
             defer self.allocator.free(response);
@@ -124,6 +149,10 @@ pub fn RpcServer(comptime HandlerType: type) type {
             }
 
             return HttpError.RequestTooLarge;
+        }
+
+        fn accept_loop_thread(self: *Self) void {
+            self.accept_loop();
         }
     };
 }
@@ -195,7 +224,7 @@ const FakeHandlers = struct {
 
 test "rpc server: wraps a POST body in an HTTP 200 response" {
     var handlers = FakeHandlers{};
-    var server = RpcServer(FakeHandlers).init(testing.allocator, &handlers, 7177, 4096);
+    var server = RpcServer(FakeHandlers).init(testing.allocator, &handlers, "127.0.0.1", 7177, 4096);
 
     const request =
         "POST / HTTP/1.1\r\n" ++

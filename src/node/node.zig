@@ -93,7 +93,7 @@ pub fn Node(comptime StoreType: type) type {
             self.config = config;
             errdefer self.config.deinit(allocator);
 
-            self.store_path = try derive_store_path(allocator, self.config.config_path);
+            self.store_path = try derive_store_path(allocator, self.config.data_dir);
             errdefer allocator.free(self.store_path);
 
             self.store = StoreType.init(allocator);
@@ -143,6 +143,7 @@ pub fn Node(comptime StoreType: type) type {
             self.rpc_server = RpcServerType.init(
                 allocator,
                 &self.rpc_handlers,
+                self.config.listen_address,
                 self.config.rpc_port,
                 default_rpc_request_size,
             );
@@ -154,6 +155,7 @@ pub fn Node(comptime StoreType: type) type {
                     .max_peers = self.config.max_peers,
                     .network = self.config.network,
                     .node_keypair = self.node_keypair,
+                    .listen_address = self.config.listen_address,
                     .listen_port = self.config.peering_port,
                     .bandwidth_limit_bytes_per_sec = mbps_to_bytes_per_sec(
                         self.config.bandwidth_limit_mbps,
@@ -168,16 +170,23 @@ pub fn Node(comptime StoreType: type) type {
             return self;
         }
 
-        /// Start the currently local-only runtime pieces. Listener threads and
-        /// cross-subsystem message flow are wired in later M11 sub-steps.
+        /// Start the owned runtime pieces in one ordered path so the node can
+        /// run as a single long-lived process.
         pub fn start(self: *Self) !void {
             if (self.running) return;
             try self.block_processor.start();
+            errdefer self.block_processor.stop();
+            try self.network.start();
+            errdefer self.network.stop();
+            try self.rpc_server.start();
+            errdefer self.rpc_server.stop_and_join();
             self.running = true;
         }
 
         pub fn stop(self: *Self) void {
             if (!self.running) return;
+            self.rpc_server.stop_and_join();
+            self.network.stop();
             self.block_processor.stop();
             self.running = false;
         }
@@ -231,11 +240,8 @@ pub fn Node(comptime StoreType: type) type {
     };
 }
 
-fn derive_store_path(allocator: std.mem.Allocator, config_path: []const u8) ![]u8 {
-    if (std.fs.path.dirname(config_path)) |dir_path| {
-        return std.fs.path.join(allocator, &.{ dir_path, "ledger.sqlite3" });
-    }
-    return allocator.dupe(u8, "ledger.sqlite3");
+fn derive_store_path(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ data_dir, "ledger.sqlite3" });
 }
 
 fn ensure_network_marker(store: anytype, network: config_mod.Network) !void {
@@ -382,14 +388,32 @@ fn make_valid_open_block(kp: ed25519.KeyPair, amount: u128, send_hash: [32]u8) !
 }
 
 fn make_test_config(allocator: std.mem.Allocator, path: []const u8, network: config_mod.Network) !config_mod.NodeConfig {
-    var config = config_mod.NodeConfig.init(try allocator.dupe(u8, path));
+    var config = try config_mod.NodeConfig.init(allocator, try allocator.dupe(u8, path));
     config.network = network;
     config.max_peers = 8;
     config.max_pending_elections = 16;
     config.work_threads = 1;
+    allocator.free(config.listen_address);
+    config.listen_address = try allocator.dupe(u8, "127.0.0.1");
     config.rpc_port = 7177;
     config.peering_port = 7176;
     return config;
+}
+
+fn assign_runtime_ports(config: *config_mod.NodeConfig) !void {
+    const rpc_addr = try std.net.Address.parseIp(config.listen_address, 0);
+    var rpc_server = try rpc_addr.listen(.{
+        .reuse_address = true,
+    });
+    defer rpc_server.deinit();
+    config.rpc_port = rpc_server.listen_address.getPort();
+
+    const peer_addr = try std.net.Address.parseIp(config.listen_address, 0);
+    var peer_server = try peer_addr.listen(.{
+        .reuse_address = true,
+    });
+    defer peer_server.deinit();
+    config.peering_port = peer_server.listen_address.getPort();
 }
 
 test "node: init wires subsystem ownership and persists identity metadata" {
@@ -422,14 +446,72 @@ test "node: init wires subsystem ownership and persists identity metadata" {
 }
 
 test "node: start and stop drive the owned block processor" {
-    const config = try make_test_config(testing.allocator, "node-runtime/config.toml", .dev);
+    var config = try make_test_config(testing.allocator, "node-runtime/config.toml", .dev);
+    try assign_runtime_ports(&config);
     const node = try Node(NullStore).init(testing.allocator, config, "runtime-pass");
     defer node.deinit();
 
     try node.start();
     try testing.expect(node.running);
+    try testing.expect(node.network.listener_thread != null);
+    try testing.expect(node.network.dialer_thread != null);
+    try testing.expect(node.rpc_server.thread != null);
 
     node.stop();
+    try testing.expect(!node.running);
+    try testing.expect(node.network.listener_thread == null);
+    try testing.expect(node.network.dialer_thread == null);
+    try testing.expect(node.rpc_server.thread == null);
+}
+
+test "node: repeated start and stop keep runtime ordering stable" {
+    var config = try make_test_config(testing.allocator, "node-repeat/config.toml", .dev);
+    try assign_runtime_ports(&config);
+    const node = try Node(NullStore).init(testing.allocator, config, "repeat-pass");
+    defer node.deinit();
+
+    node.stop();
+    try testing.expect(!node.running);
+
+    try node.start();
+    try testing.expect(node.running);
+    try testing.expect(node.rpc_server.thread != null);
+
+    try node.start();
+    try testing.expect(node.running);
+
+    node.stop();
+    try testing.expect(!node.running);
+
+    node.stop();
+    try testing.expect(!node.running);
+}
+
+test "node: stop drains queued blocks before shutdown returns" {
+    var config = try make_test_config(testing.allocator, "node-drain/config.toml", .dev);
+    try assign_runtime_ports(&config);
+    const node = try Node(NullStore).init(testing.allocator, config, "drain-pass");
+    defer node.deinit();
+
+    const kp = try ed25519.KeyPair.from_seed(&([_]u8{0x64} ** 32));
+    const send_hash = [_]u8{0x74} ** 32;
+    const amount: u128 = 9_000_000_000_000_000_000_000_000;
+
+    try node.store.put_pending(&kp.public, &send_hash, .{
+        .source = genesis_mod.GENESIS_ACCOUNT,
+        .amount = amount,
+    });
+
+    const blk = try make_valid_open_block(kp, amount, send_hash);
+
+    try node.start();
+    try node.submit_block(blk);
+    node.stop();
+
+    const info = node.store.get_account(&kp.public).?;
+    try testing.expectEqual(blk.hash(), info.frontier);
+    try testing.expectEqual(amount, info.balance);
+    try testing.expectEqual(@as(u64, 1), info.height);
     try testing.expect(!node.running);
 }
 
@@ -555,4 +637,64 @@ test "node: sqlite reopen rejects a mismatched network marker" {
         "network-pass",
     );
     try testing.expectError(error.NetworkMismatch, reopen);
+}
+
+test "node: sqlite init rejects invalid wallet storage metadata" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const config_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/config.toml",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(config_path);
+
+    const config = try make_test_config(testing.allocator, config_path, .dev);
+    const store_path = try derive_store_path(testing.allocator, config.data_dir);
+    defer testing.allocator.free(store_path);
+
+    var store = sqlite_store_mod.SqliteStore.init(testing.allocator);
+    defer store.deinit();
+    try store.open(store_path);
+    try store.migrate();
+    try store.put_meta(meta_key_network, "dev");
+    try store.put_meta(meta_key_wallet_storage, "not-hex-wallet");
+
+    const reopen = SqliteNode.init(
+        testing.allocator,
+        config,
+        "bad-wallet",
+    );
+    try testing.expectError(error.InvalidWalletStorage, reopen);
+}
+
+test "node: sqlite init rejects invalid stored node seed metadata" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const config_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/config.toml",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(config_path);
+
+    const config = try make_test_config(testing.allocator, config_path, .dev);
+    const store_path = try derive_store_path(testing.allocator, config.data_dir);
+    defer testing.allocator.free(store_path);
+
+    var store = sqlite_store_mod.SqliteStore.init(testing.allocator);
+    defer store.deinit();
+    try store.open(store_path);
+    try store.migrate();
+    try store.put_meta(meta_key_network, "dev");
+    try store.put_meta(meta_key_node_seed, "short-seed");
+
+    const reopen = SqliteNode.init(
+        testing.allocator,
+        config,
+        "bad-seed",
+    );
+    try testing.expectError(error.InvalidStoredSeed, reopen);
 }
