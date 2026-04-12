@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-linux-musl
+          - runner: ubuntu-latest
+            target: aarch64-linux-musl
+          - runner: macos-13
+            target: x86_64-macos
+          - runner: macos-14
+            target: aarch64-macos
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.15.2
+      - run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+      - run: mkdir -p dist/smallnano-${{ matrix.target }}
+      - run: cp zig-out/bin/smallnano dist/smallnano-${{ matrix.target }}/smallnano
+      - run: cp LICENSE README.md ROADMAP.md test-net.md dist/smallnano-${{ matrix.target }}/
+      - run: cp packaging/systemd/smallnano.service dist/smallnano-${{ matrix.target }}/
+      - run: tar -C dist -czf smallnano-${{ matrix.target }}.tar.gz smallnano-${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smallnano-${{ matrix.target }}
+          path: smallnano-${{ matrix.target }}.tar.gz

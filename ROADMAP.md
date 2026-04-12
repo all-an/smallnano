@@ -69,6 +69,12 @@ distribution fair and decentralised from day one.
 
 ## Milestones
 
+**Reality check:** Milestones 1-3 are fully implemented and locally testable today.
+Milestones 4-9 have substantial implementation in the repository, but several of
+their original exit criteria assumed a fully wired node runtime and a real
+multi-node devnet. That end-to-end proof is still pending and is now captured
+explicitly in Milestones 11-13 below.
+
 ### ✅ Milestone 1 — Core Types & Cryptography
 **Completed.** 80/80 tests pass. Runtime MaxRSS: 1 MB. Zero memory leaks.
 
@@ -123,8 +129,8 @@ Pruner removes old blocks without corrupting the confirmation watermark.
 
 ---
 
-### ✅ Milestone 4 — Own Wire Protocol & Networking
-**Completed.** All tests pass. Pure-logic message codec, Ed25519 handshake, framed channel, token-bucket bandwidth limiter, peer state machine, and threaded network manager with accept/dial loops.
+### Milestone 4 — Own Wire Protocol & Networking
+**Module-complete.** All tests pass for the codec, handshake, framing, bandwidth limiter, peer state machine, and threaded listener/dialer scaffolding. End-to-end relay on a real devnet is still pending the runtime work in Milestones 11-13.
 
 Sub-steps:
 1. [x] Write `src/network/message.zig` — encode/decode all message types (magic `0x534E`, LE integers)
@@ -139,13 +145,13 @@ Sub-steps:
 
 **Note:** `zig build test` is slow due to CPU PoW generation in `src/ledger/validator.zig` tests (THRESHOLD_RECEIVE ≈ 2^29 iterations). Network tests themselves are instant — channel and handshake tests use pure in-memory buffers with no sockets or threads.
 
-**Exit criteria:** Two dev-network nodes can connect, complete handshake, exchange
-keepalives and Publish messages.
+**Current status:** Message framing, handshake, peer tracking, and threaded
+accept/dial loops exist. Live outbound keepalive/publish relay is still pending.
 
 ---
 
-### ✅ Milestone 5 — Consensus (Weighted Voting)
-**Completed.** All tests pass. Representative weight cache, election state machine, active election container, vote processor, and confirmation tracker are implemented and covered by unit tests.
+### Milestone 5 — Consensus (Weighted Voting)
+**Module-complete.** All tests pass for representative weights, elections, vote processing, and confirmation tracking. Real network confirmation flow is still pending the runtime and relay milestones.
 
 Sub-steps:
 1. [x] Write `src/consensus/rep_weights.zig` — in-memory weight cache built from confirmed ledger
@@ -158,13 +164,13 @@ Sub-steps:
 8. [x] `zig fmt src/` + final test run
 9. [x] Mark M5 ✅ in ROADMAP.md, commit, push
 
-**Exit criteria:** On a two-node devnet, a published block reaches confirmed state
-and cementation height advances monotonically.
+**Current status:** Consensus components are implemented and unit-tested. A real
+two-node confirmation path is still pending M11-M13 integration.
 
 ---
 
-### ✅ Milestone 6 — Bootstrap
-**Completed.** All tests pass. Bootstrap frontier scan, `PullReq` servicing, bounded `PullAck` windows, pruning-watermark enforcement, and client-side replay/resume are implemented and covered by unit tests.
+### Milestone 6 — Bootstrap
+**Module-complete.** All tests pass for frontier enumeration, `PullReq`/`PullAck`, pruning-watermark enforcement, and replay/resume logic. Live ledger sync between running nodes is still pending the runtime and peer-relay milestones.
 
 Sub-steps:
 1. [x] Write `src/bootstrap/server.zig` — serve blocks in response to `PullReq`, respect pruning watermark
@@ -174,13 +180,13 @@ Sub-steps:
 5. [x] `zig fmt src/` + final test run
 6. [x] Mark M6 ✅ in ROADMAP.md, commit, push
 
-**Exit criteria:** A fresh node can sync a dev-network ledger from genesis.
-Pruned accounts handled without errors.
+**Current status:** Bootstrap client/server logic exists and is unit-tested.
+Fresh-node sync on a real devnet is still pending M11-M13 integration.
 
 ---
 
-### ✅ Milestone 7 — Wallet & Key Management
-**Completed.** All tests pass. Deterministic account derivation, encrypted seed storage, wallet locking/unlocking, and send/open-receive block builders are implemented and covered by unit tests.
+### Milestone 7 — Wallet & Key Management
+**Module-complete.** All tests pass for deterministic derivation, encrypted seed storage, lock/unlock, and block builders. CLI-driven live wallet usage still depends on the runtime milestones.
 
 Sub-steps:
 1. [x] Write `src/wallet/wallet.zig` — deterministic key derivation, encrypted storage, block builders
@@ -189,13 +195,13 @@ Sub-steps:
 4. [x] `zig fmt src/` + final test run
 5. [x] Mark M7 ✅ in ROADMAP.md, commit, push
 
-**Exit criteria:** Can generate a keypair, receive smn (devnet), and send smn (devnet)
-using only the CLI.
+**Current status:** Wallet primitives and block builders are implemented and
+tested. Real devnet send/receive through the node CLI is still pending M11-M13.
 
 ---
 
-### ✅ Milestone 8 — JSON-RPC API
-**Completed.** All tests pass. A minimal HTTP/1.1 JSON-RPC server and handler layer are implemented, including wallet lock/unlock, account creation, account and pending queries, and transaction submission (`process`, `send`, `receive`) with unit tests for both JSON dispatch and raw HTTP request handling.
+### Milestone 8 — JSON-RPC API
+**Module-complete.** All tests pass for the HTTP transport and JSON-RPC handlers. A real operator-facing RPC service still depends on wiring the runtime together.
 
 Sub-steps:
 1. [x] Write `src/rpc/server.zig` — single-threaded HTTP/1.1 server, no external lib
@@ -205,24 +211,25 @@ Sub-steps:
 5. [x] `zig fmt src/` + final test run
 6. [x] Mark M8 ✅ in ROADMAP.md, commit, push
 
-**Exit criteria:** An HTTP client can query balances and submit transactions.
+**Current status:** RPC parsing and handlers exist and are unit-tested. A live
+RPC server backed by a running node is still pending M11-M13.
 
 ---
 
 ### Milestone 9 — Configuration & CLI
-**Goal:** A friendly, well-documented operator experience.
+**Config-complete, runtime-pending.** All tests pass for the config loader, CLI parsing, help output, and shutdown hooks. The entrypoint still stops before starting a real node instance.
 
 Sub-steps:
-1. [ ] Write `src/config.zig` — `NodeConfig` parsed from TOML + CLI flags, all parameters
-2. [ ] Auto-generate config file with defaults and inline comments on first run
-3. [ ] `--help` output for every flag
-4. [ ] Graceful shutdown on SIGINT / SIGTERM
-5. [ ] Run `zig build test` — fix until green
-6. [ ] `zig fmt src/` + final test run
-7. [ ] Mark M9 ✅ in ROADMAP.md, commit, push
+1. [x] Write `src/config.zig` — `NodeConfig` parsed from TOML + CLI flags, all parameters
+2. [x] Auto-generate config file with defaults and inline comments on first run
+3. [x] `--help` output for every flag
+4. [x] Graceful shutdown on SIGINT / SIGTERM
+5. [x] Run `zig build test` — fix until green
+6. [x] `zig fmt src/` + final test run
+7. [x] Mark M9 ✅ in ROADMAP.md, commit, push
 
-**Exit criteria:** A non-technical user edits one TOML file to configure their node.
-All limits enforce the memory and disk targets.
+**Current status:** The config file and CLI surface are implemented and tested.
+Full operator-facing runtime behavior still depends on M11-M13.
 
 ---
 
@@ -230,18 +237,74 @@ All limits enforce the memory and disk targets.
 **Goal:** Production-quality binary with automated quality gates.
 
 Sub-steps:
-1. [ ] GitHub Actions CI: `zig build test` on Linux x86_64, aarch64, macOS arm64 + `zig fmt --check`
-2. [ ] Fuzz targets for block deserialisation and message parsing
-3. [ ] Integration test: 3-node devnet, send a transaction, verify confirmation on all nodes
-4. [ ] Benchmark: blocks/second insertion rate and peak RSS — must meet resource targets
-5. [ ] Release binaries: `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, `aarch64-macos`
-6. [ ] Docker image (scratch-based, < 15 MB compressed)
-7. [ ] Systemd unit file and one-command install script
-8. [ ] Project website with single-page explainer and download links
+1. [x] GitHub Actions CI: `zig build test` on Linux x86_64, aarch64, macOS arm64 + `zig fmt --check`
+2. [x] Fuzz targets for block deserialisation and message parsing
+3. [x] Release binaries: `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, `aarch64-macos`
+4. [x] Docker image (scratch-based, < 15 MB compressed)
+5. [x] Systemd unit file and one-command install script
+
+**Current status:** CI, release packaging, fuzz harnesses, benchmark scaffolding,
+Docker packaging, installer assets, and `test-net.md` exist.
 
 **Exit criteria:** `curl -fsSL install.sh | sh` installs smallnano on a fresh
 Ubuntu 22.04 VM. Node runs at ≤ 64 MB RAM idle after sync. Any low-end computer
 can run a full node continuously.
+
+---
+
+### Milestone 11 — Node Runtime Wiring
+**Goal:** Turn the current module set into a real long-running node process.
+
+Sub-steps:
+1. [x] Write `src/node/node.zig` — own the store, ledger, block processor, network, bootstrap, wallet, and RPC lifecycles
+2. [x] Replace the placeholder wait loop in `src/main.zig` with real startup, shutdown, and error propagation
+3. [x] Wire genesis initialization, database open/migrate, and background worker startup in one runtime path
+4. [x] Expose a small internal API for publishing blocks, starting elections, and forwarding confirmations between subsystems
+5. [ ] Add unit tests for clean startup/shutdown ordering and subsystem failure handling
+6. [ ] Run `zig build test` — fix until green
+7. [ ] `zig fmt src/` + final test run
+
+**Exit criteria:** `smallnano node run` starts a real node instance, opens its
+store, brings up networking/RPC workers, and shuts down cleanly without leaking
+threads or state.
+
+---
+
+### Milestone 12 — Peer Relay & Bootstrap Configuration
+**Goal:** Make multiple nodes discover each other, exchange live traffic, and sync without manual code changes.
+
+Sub-steps:
+1. [ ] Extend `src/network/network.zig` with outbound publish, vote, keepalive, and bootstrap request relay paths
+2. [ ] Track active peer channels so the node can broadcast or target messages after handshake completion
+3. [ ] Extend `src/config.zig` with peer-seed, bootstrap-peer, listen-address, external-address, and data-dir settings
+4. [ ] Persist peer discovery state safely and bound retry/backoff behavior for low-resource machines
+5. [ ] Add tests covering outbound relay, peer selection, bootstrap resume, and config parsing/validation
+6. [ ] Run `zig build test` — fix until green
+7. [ ] `zig fmt src/` + final test run
+
+**Exit criteria:** Three separately configured nodes can discover peers, relay
+blocks and votes outward, and bootstrap ledger state from each other on a
+devnet.
+
+---
+
+### Milestone 13 — Multi-Node Devnet Validation
+**Goal:** Prove that smallnano works as a real multi-process cryptocurrency network.
+
+Sub-steps:
+1. [ ] Add an end-to-end integration test that launches three node processes and verifies block propagation + confirmation
+2. [ ] Verify wallet send/receive flow across three nodes using the JSON-RPC surface
+3. [ ] Measure idle RSS, sync RSS, disk usage, and confirmation latency against the design targets
+4. [ ] Update `test-net.md` with the final Windows/macOS/Linux manual test procedure and expected results
+5. [ ] Run the three-machine manual devnet: one Windows node, one macOS node, one Linux node
+6. [ ] Fix the remaining cross-platform defects found during the manual run
+7. [ ] Add the three-node integration test to the release gate once it is stable
+8. [ ] Publish the project website with a single-page explainer and download links
+9. [ ] Mark the project release-ready only after the automated and manual devnet tests both pass
+
+**Exit criteria:** A three-node devnet can process and confirm transactions
+between separate machines, and both automated and manual tests prove the network
+behaves correctly.
 
 ---
 
@@ -255,7 +318,10 @@ can run a full node continuously.
 | M5 (consensus) | < 40 MB | < 1 MB |
 | M6 (bootstrap, 1k blk/acct) | < 128 MB (syncing) | ~500 MB |
 | M7–M9 (wallet + RPC + config) | < 64 MB idle | ~500 MB |
-| M10 (production) | ≤ 64 MB idle / ≤ 256 MB peak | ≤ 2 GB |
+| M10 (hardening/release scaffolding) | ≤ 64 MB idle / ≤ 256 MB peak | ≤ 2 GB |
+| M11 (runtime wiring) | ≤ 64 MB idle | ~500 MB |
+| M12 (peer relay + bootstrap config) | ≤ 96 MB peak | ~500 MB |
+| M13 (real multi-node validation) | ≤ 64 MB idle / ≤ 256 MB peak | ≤ 2 GB |
 
 ---
 

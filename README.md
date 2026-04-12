@@ -30,6 +30,10 @@ Inspired by Nano's ideas (zero fees, instant finality, no mining) but built as a
 zig build                          # debug binary
 zig build -Doptimize=ReleaseSafe   # production binary
 zig build test                     # run all unit tests
+zig build fmt-check                # formatting check used in CI
+zig build bench-ledger -- 10       # local ledger benchmark
+printf 'abc' | zig build fuzz-block
+printf 'abcdefgh' | zig build fuzz-message
 ```
 
 Requires Zig 0.15+. No other dependencies to install — SQLite is vendored.
@@ -41,6 +45,8 @@ zig build run -- node run --network=main
 zig build run -- node run --network=dev --max-blocks-per-account=500
 ```
 
+Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, and shuts down cleanly, but the full multi-node runtime is still not wired together yet. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
+
 ## Status
 
 | Milestone | Status |
@@ -48,13 +54,16 @@ zig build run -- node run --network=dev --max-blocks-per-account=500
 | M1 — Core types & cryptography | ✅ Done |
 | M2 — Storage layer (SQLite) | ✅ Done |
 | M3 — Ledger & block validation | ✅ Done |
-| M4 — Wire protocol & networking | ✅ Done |
-| M5 — Consensus (weighted voting) | ✅ Done |
-| M6 — Bootstrap | ✅ Done |
-| M7 — Wallet & key management | ✅ Done |
-| M8 — JSON-RPC API | ✅ Done |
-| M9 — Configuration & CLI | pending |
-| M10 — Hardening & CI | pending |
+| M4 — Wire protocol & networking | module-complete, integration pending |
+| M5 — Consensus (weighted voting) | module-complete, integration pending |
+| M6 — Bootstrap | module-complete, integration pending |
+| M7 — Wallet & key management | module-complete, integration pending |
+| M8 — JSON-RPC API | module-complete, integration pending |
+| M9 — Configuration & CLI | config complete, runtime pending |
+| M10 — Hardening & CI | in progress |
+| M11 — Node runtime wiring | in progress |
+| M12 — Peer relay & bootstrap config | pending |
+| M13 — Multi-node devnet validation | pending |
 
 See [ROADMAP.md](ROADMAP.md) for full details.
 
@@ -62,6 +71,8 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 
 ```
 src/
+  config.zig  generated config, CLI flags, help, validation
+  node/       runtime owner, genesis bootstrap, publish/vote coordination
   types/      block, account, amount, vote, pending, genesis
   crypto/     blake2b, ed25519, proof-of-work
   store/      SQLite store + in-memory null store for tests
@@ -72,6 +83,14 @@ src/
   wallet/     key management, block builders
   rpc/        JSON-RPC HTTP server
 ```
+
+## Operations
+
+- [test-net.md](test-net.md) — three-machine Windows/macOS/Linux bring-up plan and current runtime blockers
+- [scripts/install.sh](scripts/install.sh) — release installer for packaged binaries
+- [packaging/systemd/smallnano.service](packaging/systemd/smallnano.service) — systemd unit template
+- [.github/workflows/ci.yml](.github/workflows/ci.yml) — formatting and unit-test CI
+- [.github/workflows/release.yml](.github/workflows/release.yml) — cross-target release artifact workflow
 
 ## License
 

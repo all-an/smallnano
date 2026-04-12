@@ -1,0 +1,22 @@
+[Unit]
+Description=smallnano node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smallnano
+Group=smallnano
+ExecStart=/usr/local/bin/smallnano node run --config /etc/smallnano/config.toml
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+WorkingDirectory=/var/lib/smallnano
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/smallnano /etc/smallnano
+
+[Install]
+WantedBy=multi-user.target

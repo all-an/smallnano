@@ -1,0 +1,7 @@
+.git
+.github
+.zig-cache
+zig-out
+rsnano-node
+draft.md
+web.db
