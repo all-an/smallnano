@@ -392,6 +392,16 @@ pub const SqliteStore = struct {
         }
     }
 
+    pub fn delete_peer(self: *SqliteStore, address: []const u8) SqliteError!void {
+        const sql = "DELETE FROM peers WHERE address=?1";
+        var stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK)
+            return SqliteError.Prepare;
+        defer _ = c.sqlite3_finalize(stmt);
+        _ = c.sqlite3_bind_text(stmt, 1, address.ptr, @intCast(address.len), c.SQLITE_STATIC);
+        if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return SqliteError.Step;
+    }
+
     pub fn delete_stale_peers(self: *SqliteStore, older_than: i64) SqliteError!void {
         const sql = "DELETE FROM peers WHERE last_seen<?1";
         var stmt: ?*c.sqlite3_stmt = null;
@@ -794,6 +804,29 @@ test "sqlite_store: peers put and get" {
     }
     try s.get_peers(std.testing.allocator, &list);
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
+}
+
+test "sqlite_store: delete_peer removes one saved peer" {
+    var path_buf: [64]u8 = undefined;
+    const path = tmp_db_path(&path_buf);
+    defer std.fs.deleteFileAbsolute(path) catch {};
+    var s = SqliteStore.init(std.testing.allocator);
+    defer s.deinit();
+    try s.open(path);
+    try s.migrate();
+
+    try s.put_peer("10.0.0.1:7176", 1000);
+    try s.put_peer("10.0.0.2:7176", 2000);
+    try s.delete_peer("10.0.0.1:7176");
+
+    var list = std.ArrayList(PeerRow){};
+    defer {
+        for (list.items) |p| std.testing.allocator.free(p.address);
+        list.deinit(std.testing.allocator);
+    }
+    try s.get_peers(std.testing.allocator, &list);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expectEqualStrings("10.0.0.2:7176", list.items[0].address);
 }
 
 test "sqlite_store: meta put and get" {

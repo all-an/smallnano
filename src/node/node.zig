@@ -24,12 +24,14 @@ const rep_weights_mod = @import("../consensus/rep_weights.zig");
 const active_elections_mod = @import("../consensus/active_elections.zig");
 const confirmation_mod = @import("../consensus/confirmation.zig");
 const vote_processor_mod = @import("../consensus/vote_processor.zig");
+const store_mod = @import("../store/store.zig");
 const sqlite_store_mod = @import("../store/sqlite_store.zig");
 
 const RepWeights = rep_weights_mod.RepWeights;
 const ActiveElections = active_elections_mod.ActiveElections;
 
 const default_rpc_request_size: usize = 256 * 1024;
+const stale_peer_ttl_sec: i64 = 30 * 24 * 60 * 60;
 const meta_key_network = "network";
 const meta_key_genesis_hash = "genesis_hash_hex";
 const meta_key_node_seed = "node_seed_hex";
@@ -72,7 +74,7 @@ pub fn Node(comptime StoreType: type) type {
         rpc_server: RpcServerType,
         network: network_mod.Network,
         node_keypair: ed25519.KeyPair,
-        network_ctx_token: u8,
+        runtime_mutex: std.Thread.Mutex = .{},
         running: bool,
 
         /// Allocate and fully initialise a node object.
@@ -90,6 +92,7 @@ pub fn Node(comptime StoreType: type) type {
             errdefer allocator.destroy(self);
 
             self.allocator = allocator;
+            self.runtime_mutex = .{};
             self.config = config;
             errdefer self.config.deinit(allocator);
 
@@ -139,7 +142,16 @@ pub fn Node(comptime StoreType: type) type {
             );
             errdefer self.wallet.deinit();
 
-            self.rpc_handlers = RpcHandlersType.init(allocator, &self.ledger, &self.wallet);
+            self.rpc_handlers = RpcHandlersType.init(
+                allocator,
+                &self.ledger,
+                &self.wallet,
+                &self.config,
+                .{
+                    .ctx = @ptrCast(self),
+                    .publish_fn = Self.rpc_publish_block,
+                },
+            );
             self.rpc_server = RpcServerType.init(
                 allocator,
                 &self.rpc_handlers,
@@ -148,7 +160,6 @@ pub fn Node(comptime StoreType: type) type {
                 default_rpc_request_size,
             );
 
-            self.network_ctx_token = 0;
             self.network = network_mod.Network.init(
                 allocator,
                 .{
@@ -161,10 +172,14 @@ pub fn Node(comptime StoreType: type) type {
                         self.config.bandwidth_limit_mbps,
                     ),
                 },
-                on_network_message,
-                &self.network_ctx_token,
+                Self.on_network_message,
+                @ptrCast(self),
             );
             errdefer self.network.deinit();
+
+            try load_configured_peers(&self.network, self.config.peer_seeds.items);
+            try load_configured_peers(&self.network, self.config.bootstrap_peers.items);
+            try restore_persisted_peers(allocator, &self.store, &self.network);
 
             self.running = false;
             return self;
@@ -187,6 +202,9 @@ pub fn Node(comptime StoreType: type) type {
             if (!self.running) return;
             self.rpc_server.stop_and_join();
             self.network.stop();
+            persist_known_peers(self.allocator, &self.store, &self.network) catch |err| {
+                std.log.warn("node: failed to persist peers during shutdown: {}", .{err});
+            };
             self.block_processor.stop();
             self.running = false;
         }
@@ -201,23 +219,144 @@ pub fn Node(comptime StoreType: type) type {
         /// Publish a locally-produced block synchronously and immediately start
         /// an election for its root using the current confirmed online weight.
         pub fn publish_block(self: *Self, blk: *const block_mod.StateBlock) !PublishResult {
-            const process = try self.ledger.process(blk);
-            const election = try self.start_election(blk);
-            return .{
-                .process = process,
-                .election = election,
+            const result = blk_result: {
+                self.runtime_mutex.lock();
+                defer self.runtime_mutex.unlock();
+                break :blk_result try self.publish_block_locked(blk);
             };
+
+            if (self.running) {
+                _ = self.network.broadcast_publish(blk) catch |err| {
+                    std.log.warn("node: failed to relay published block: {}", .{err});
+                };
+            }
+
+            return result;
         }
 
         pub fn start_election(self: *Self, blk: *const block_mod.StateBlock) !active_elections_mod.StartResult {
-            return self.active_elections.start_election(blk, self.rep_weights.total_weight());
+            self.runtime_mutex.lock();
+            defer self.runtime_mutex.unlock();
+            return self.start_election_locked(blk);
         }
 
         /// Route a vote through the consensus pipeline. Confirmation forwarding
         /// remains centralized in vote_processor -> confirmation tracker so
         /// callers do not need to coordinate those subsystems manually.
         pub fn process_vote(self: *Self, vote: *const vote_mod.Vote) !vote_processor_mod.ProcessSummary {
+            self.runtime_mutex.lock();
+            defer self.runtime_mutex.unlock();
+            return self.process_vote_locked(vote);
+        }
+
+        fn publish_block_locked(self: *Self, blk: *const block_mod.StateBlock) !PublishResult {
+            const process = try self.ledger.process(blk);
+            const election = try self.start_election_locked(blk);
+            return .{
+                .process = process,
+                .election = election,
+            };
+        }
+
+        fn start_election_locked(self: *Self, blk: *const block_mod.StateBlock) !active_elections_mod.StartResult {
+            return self.active_elections.start_election(blk, self.rep_weights.total_weight());
+        }
+
+        fn process_vote_locked(self: *Self, vote: *const vote_mod.Vote) !vote_processor_mod.ProcessSummary {
             return self.vote_processor.process(vote);
+        }
+
+        fn rpc_publish_block(
+            ctx: *anyopaque,
+            blk: *const block_mod.StateBlock,
+        ) anyerror!ledger_mod.ProcessResult {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            const published = try self.publish_block(blk);
+            return published.process;
+        }
+
+        fn on_network_message(
+            ctx: *anyopaque,
+            peer_addr: []const u8,
+            msg_type: message_mod.MessageType,
+            body: []const u8,
+        ) void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            self.route_network_message(peer_addr, msg_type, body) catch |err| {
+                std.log.warn("node: failed to handle network {s} from {s}: {}", .{
+                    @tagName(msg_type),
+                    peer_addr,
+                    err,
+                });
+            };
+        }
+
+        fn route_network_message(
+            self: *Self,
+            peer_addr: []const u8,
+            msg_type: message_mod.MessageType,
+            body: []const u8,
+        ) !void {
+            switch (msg_type) {
+                .publish => try self.handle_publish_message(body),
+                .vote_by => try self.handle_vote_message(body),
+                .pull_req => try self.handle_pull_req_message(peer_addr, body),
+                .pull_ack => try self.handle_pull_ack_message(body),
+                .handshake,
+                .handshake_ack,
+                .keepalive,
+                .telemetry,
+                => {},
+            }
+        }
+
+        fn handle_publish_message(self: *Self, body: []const u8) !void {
+            if (body.len != message_mod.PUBLISH_BODY_SIZE) return error.InvalidPublishBody;
+            const publish = message_mod.PublishBody.decode(body[0..message_mod.PUBLISH_BODY_SIZE]);
+
+            self.runtime_mutex.lock();
+            defer self.runtime_mutex.unlock();
+
+            _ = self.ledger.process(&publish.block) catch |err| switch (err) {
+                error.AlreadyExists => {},
+                else => return err,
+            };
+            _ = try self.start_election_locked(&publish.block);
+        }
+
+        fn handle_vote_message(self: *Self, body: []const u8) !void {
+            const vote_body = try message_mod.VoteByBody.decode(body);
+
+            self.runtime_mutex.lock();
+            defer self.runtime_mutex.unlock();
+            _ = try self.process_vote_locked(&vote_body.vote);
+        }
+
+        fn handle_pull_req_message(self: *Self, peer_addr: []const u8, body: []const u8) !void {
+            if (body.len != message_mod.PULL_REQ_BODY_SIZE) return error.InvalidPullReqBody;
+            const req = message_mod.PullReqBody.decode(body[0..message_mod.PULL_REQ_BODY_SIZE]);
+
+            const ack = ack_body: {
+                self.runtime_mutex.lock();
+                defer self.runtime_mutex.unlock();
+                break :ack_body self.bootstrap_server.serve_pull_req(req) catch |err| switch (err) {
+                    error.AccountNotFound,
+                    error.StartHeightPruned,
+                    error.NoBlocksAvailable,
+                    => return,
+                    else => return err,
+                };
+            };
+
+            try self.network.send_pull_ack(peer_addr, &ack);
+        }
+
+        fn handle_pull_ack_message(self: *Self, body: []const u8) !void {
+            const ack = try message_mod.PullAckBody.decode(body);
+
+            self.runtime_mutex.lock();
+            defer self.runtime_mutex.unlock();
+            _ = try self.bootstrap_client.apply_pull_ack(&ack);
         }
 
         pub fn deinit(self: *Self) void {
@@ -358,18 +497,59 @@ fn mbps_to_bytes_per_sec(limit_mbps: u32) u64 {
     return @as(u64, limit_mbps) * 1024 * 1024 / 8;
 }
 
-fn on_network_message(
-    _: *anyopaque,
-    _: []const u8,
-    _: message_mod.MessageType,
-    _: []const u8,
-) void {}
+fn load_configured_peers(network: *network_mod.Network, peers: []const []u8) !void {
+    for (peers) |peer| try network.add_known_peer(peer);
+}
+
+fn restore_persisted_peers(
+    allocator: std.mem.Allocator,
+    store: anytype,
+    network: *network_mod.Network,
+) !void {
+    var peers = std.ArrayList(store_mod.PeerRow){};
+    defer {
+        for (peers.items) |peer| allocator.free(peer.address);
+        peers.deinit(allocator);
+    }
+
+    try store.get_peers(allocator, &peers);
+    for (peers.items) |peer| {
+        network.add_known_peer(peer.address) catch |err| switch (err) {
+            error.InvalidFormat,
+            error.PortOutOfRange,
+            => {
+                std.log.warn("node: dropping malformed persisted peer {s}", .{peer.address});
+                try store.delete_peer(peer.address);
+            },
+            else => return err,
+        };
+    }
+}
+
+fn persist_known_peers(
+    allocator: std.mem.Allocator,
+    store: anytype,
+    network: *network_mod.Network,
+) !void {
+    var peers = std.ArrayList(network_mod.PersistedPeer){};
+    defer {
+        for (peers.items) |peer| allocator.free(peer.address);
+        peers.deinit(allocator);
+    }
+
+    try network.snapshot_peers(allocator, &peers);
+    for (peers.items) |peer| {
+        try store.put_peer(peer.address, peer.last_seen);
+    }
+    try store.delete_stale_peers(std.time.timestamp() - stale_peer_ttl_sec);
+}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
 const NullStore = @import("../store/null_store.zig").NullStore;
 const work_mod = @import("../crypto/work.zig");
+var test_network_ctx_token: u8 = 0;
 
 fn make_valid_open_block(kp: ed25519.KeyPair, amount: u128, send_hash: [32]u8) !block_mod.StateBlock {
     var blk = block_mod.StateBlock{
@@ -416,6 +596,60 @@ fn assign_runtime_ports(config: *config_mod.NodeConfig) !void {
     config.peering_port = peer_server.listen_address.getPort();
 }
 
+fn peer_endpoint(allocator: std.mem.Allocator, config: *const config_mod.NodeConfig) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}:{d}", .{
+        config.listen_address,
+        config.peering_port,
+    });
+}
+
+fn make_test_network(allocator: std.mem.Allocator) network_mod.Network {
+    const cb: network_mod.OnMessageFn = struct {
+        fn f(_: *anyopaque, _: []const u8, _: message_mod.MessageType, _: []const u8) void {}
+    }.f;
+    return network_mod.Network.init(allocator, .{
+        .max_peers = 8,
+        .network = .dev,
+        .node_keypair = ed25519.KeyPair.generate(),
+        .listen_address = "127.0.0.1",
+        .listen_port = 7176,
+    }, cb, &test_network_ctx_token);
+}
+
+fn make_stream_pair() ![2]std.net.Stream {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    var fds: [2]std.c.fd_t = undefined;
+    if (std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &fds) != 0) {
+        return error.SocketPairFailed;
+    }
+    return .{
+        .{ .handle = fds[0] },
+        .{ .handle = fds[1] },
+    };
+}
+
+fn register_test_channel(net: *network_mod.Network, addr: []const u8, stream: std.net.Stream) !void {
+    try net.add_known_peer(addr);
+    net.mutex.lock();
+    defer net.mutex.unlock();
+
+    var key: ?[]const u8 = null;
+    var it = net.peers.iterator();
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, entry.key_ptr.*, addr)) {
+            key = entry.key_ptr.*;
+            break;
+        }
+    }
+
+    const found = key orelse return error.UnknownPeer;
+    try net.active_channels.put(found, stream);
+    if (net.peers.getPtr(addr)) |peer| {
+        peer.mark_connected([_]u8{0xAB} ** 32, std.time.timestamp());
+    }
+}
+
 test "node: init wires subsystem ownership and persists identity metadata" {
     const config = try make_test_config(testing.allocator, "node-test/config.toml", .dev);
     const node = try Node(NullStore).init(testing.allocator, config, "node-pass");
@@ -443,6 +677,82 @@ test "node: init wires subsystem ownership and persists identity metadata" {
     try node.wallet.unlock("node-pass");
     const derived = try node.wallet.derive_account(0);
     try testing.expect(std.mem.startsWith(u8, derived.address[0..], "smn_"));
+}
+
+test "node: init loads configured seed and bootstrap peers into the network" {
+    var config = try make_test_config(testing.allocator, "node-peers/config.toml", .dev);
+    try config.peer_seeds.append(testing.allocator, try testing.allocator.dupe(u8, "192.0.2.10:7176"));
+    try config.bootstrap_peers.append(testing.allocator, try testing.allocator.dupe(u8, "[2001:db8::10]:7176"));
+
+    const node = try Node(NullStore).init(testing.allocator, config, "peer-pass");
+    defer node.deinit();
+
+    try testing.expectEqual(@as(usize, 2), node.network.peer_count());
+}
+
+test "node: restore_persisted_peers loads stored peers into the network" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+    try store.put_peer("192.0.2.10:7176", 1000);
+    try store.put_peer("[2001:db8::1]:7176", 2000);
+
+    var network = make_test_network(testing.allocator);
+    defer network.deinit();
+
+    try restore_persisted_peers(testing.allocator, &store, &network);
+
+    try testing.expectEqual(@as(usize, 2), network.peer_count());
+}
+
+test "node: restore_persisted_peers drops malformed stored rows" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+    try store.put_peer("192.0.2.10:7176", 1000);
+    try store.put_peer("bad peer:7176", 2000);
+
+    var network = make_test_network(testing.allocator);
+    defer network.deinit();
+
+    try restore_persisted_peers(testing.allocator, &store, &network);
+
+    try testing.expectEqual(@as(usize, 1), network.peer_count());
+
+    var peers = std.ArrayList(store_mod.PeerRow){};
+    defer {
+        for (peers.items) |peer| testing.allocator.free(peer.address);
+        peers.deinit(testing.allocator);
+    }
+    try store.get_peers(testing.allocator, &peers);
+    try testing.expectEqual(@as(usize, 1), peers.items.len);
+    try testing.expectEqualStrings("192.0.2.10:7176", peers.items[0].address);
+}
+
+test "node: persist_known_peers stores live peers and prunes stale rows" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+    try store.put_peer("198.51.100.2:7176", std.time.timestamp() - stale_peer_ttl_sec - 10);
+
+    var network = make_test_network(testing.allocator);
+    defer network.deinit();
+
+    try network.add_known_peer("192.0.2.20:7176");
+    network.mutex.lock();
+    if (network.peers.getPtr("192.0.2.20:7176")) |peer| {
+        peer.mark_connected([_]u8{0x55} ** 32, std.time.timestamp());
+    }
+    network.mutex.unlock();
+
+    try persist_known_peers(testing.allocator, &store, &network);
+
+    var peers = std.ArrayList(store_mod.PeerRow){};
+    defer {
+        for (peers.items) |peer| testing.allocator.free(peer.address);
+        peers.deinit(testing.allocator);
+    }
+    try store.get_peers(testing.allocator, &peers);
+
+    try testing.expectEqual(@as(usize, 1), peers.items.len);
+    try testing.expectEqualStrings("192.0.2.20:7176", peers.items[0].address);
 }
 
 test "node: start and stop drive the owned block processor" {
@@ -574,6 +884,133 @@ test "node: process_vote forwards confirmed winners into confirmation state" {
     try testing.expectEqual(@as(u64, 1), ch.height);
     try testing.expectEqual(publish.process.hash, ch.frontier);
     try testing.expectEqual(amount, node.rep_weights.get(&account_kp.public));
+}
+
+test "node: network publish callback processes the block and starts an election" {
+    const config = try make_test_config(testing.allocator, "node-callback-publish/config.toml", .dev);
+    const node = try Node(NullStore).init(testing.allocator, config, "callback-publish");
+    defer node.deinit();
+
+    const kp = try ed25519.KeyPair.from_seed(&([_]u8{0x81} ** 32));
+    const send_hash = [_]u8{0x91} ** 32;
+    const amount: u128 = 3_000_000_000_000_000_000_000_000;
+
+    try node.store.put_pending(&kp.public, &send_hash, .{
+        .source = genesis_mod.GENESIS_ACCOUNT,
+        .amount = amount,
+    });
+
+    const blk = try make_valid_open_block(kp, amount, send_hash);
+    const body = (message_mod.PublishBody{ .block = blk }).encode();
+    try node.route_network_message("127.0.0.1:7176", .publish, &body);
+
+    const info = node.store.get_account(&kp.public).?;
+    try testing.expectEqual(blk.hash(), info.frontier);
+    try testing.expectEqual(amount, info.balance);
+    try testing.expectEqual(@as(u64, 1), info.height);
+    try testing.expectEqual(@as(usize, 1), node.active_elections.count());
+}
+
+test "node: network vote callback confirms an active election" {
+    const config = try make_test_config(testing.allocator, "node-callback-vote/config.toml", .dev);
+    const node = try Node(NullStore).init(testing.allocator, config, "callback-vote");
+    defer node.deinit();
+
+    const account_kp = try ed25519.KeyPair.from_seed(&([_]u8{0x82} ** 32));
+    const rep_kp = try ed25519.KeyPair.from_seed(&([_]u8{0x83} ** 32));
+    const send_hash = [_]u8{0x92} ** 32;
+    const amount: u128 = 4_000_000_000_000_000_000_000_000;
+
+    node.rep_weights.clear();
+    try node.rep_weights.set_confirmed(&([_]u8{0xA3} ** 32), &rep_kp.public, 100);
+
+    try node.store.put_pending(&account_kp.public, &send_hash, .{
+        .source = genesis_mod.GENESIS_ACCOUNT,
+        .amount = amount,
+    });
+
+    const blk = try make_valid_open_block(account_kp, amount, send_hash);
+    _ = try node.publish_block(&blk);
+
+    const vote = try vote_mod.Vote.create(&rep_kp.secret, &rep_kp.public, 11, &.{blk.hash()});
+    var vote_buf: [512]u8 = undefined;
+    const vote_len = try (message_mod.VoteByBody{ .vote = vote }).encode(&vote_buf);
+    try node.route_network_message("127.0.0.1:7176", .vote_by, vote_buf[0..vote_len]);
+
+    const ch = node.store.get_confirmation_height(&account_kp.public).?;
+    try testing.expectEqual(@as(u64, 1), ch.height);
+    try testing.expectEqual(blk.hash(), ch.frontier);
+}
+
+test "node: network pull_req callback writes a pull_ack to the requesting peer" {
+    const config = try make_test_config(testing.allocator, "node-callback-pull-req/config.toml", .dev);
+    const node = try Node(NullStore).init(testing.allocator, config, "callback-pull-req");
+    defer node.deinit();
+
+    const peer_addr = "127.0.0.1:7176";
+    var pair = try make_stream_pair();
+    defer pair[0].close();
+    defer pair[1].close();
+    try register_test_channel(&node.network, peer_addr, pair[0]);
+
+    const kp = try ed25519.KeyPair.from_seed(&([_]u8{0x84} ** 32));
+    const send_hash = [_]u8{0x93} ** 32;
+    const amount: u128 = 6_000_000_000_000_000_000_000_000;
+
+    try node.store.put_pending(&kp.public, &send_hash, .{
+        .source = genesis_mod.GENESIS_ACCOUNT,
+        .amount = amount,
+    });
+
+    const blk = try make_valid_open_block(kp, amount, send_hash);
+    _ = try node.publish_block(&blk);
+
+    const req = message_mod.PullReqBody{
+        .account = kp.public,
+        .start_height = 1,
+    };
+    const req_body = req.encode();
+    try node.route_network_message(peer_addr, .pull_req, &req_body);
+
+    var recv_buf: [2048]u8 = undefined;
+    const frame = try network_mod.Channel.init(pair[1]).read_frame(&recv_buf);
+    const hdr = try message_mod.MessageHeader.decode(frame[0..message_mod.HEADER_SIZE]);
+    try testing.expectEqual(message_mod.MessageType.pull_ack, hdr.msg_type);
+
+    const ack = try message_mod.PullAckBody.decode(frame[message_mod.HEADER_SIZE..]);
+    try testing.expectEqual(@as(u8, 1), ack.count);
+    try testing.expectEqual(blk.hash(), ack.blocks[0].hash());
+}
+
+test "node: network pull_ack callback replays bootstrap blocks" {
+    const config = try make_test_config(testing.allocator, "node-callback-pull-ack/config.toml", .dev);
+    const node = try Node(NullStore).init(testing.allocator, config, "callback-pull-ack");
+    defer node.deinit();
+
+    const kp = try ed25519.KeyPair.from_seed(&([_]u8{0x85} ** 32));
+    const send_hash = [_]u8{0x94} ** 32;
+    const amount: u128 = 8_000_000_000_000_000_000_000_000;
+
+    try node.store.put_pending(&kp.public, &send_hash, .{
+        .source = genesis_mod.GENESIS_ACCOUNT,
+        .amount = amount,
+    });
+
+    const blk = try make_valid_open_block(kp, amount, send_hash);
+    var ack = message_mod.PullAckBody{
+        .blocks = undefined,
+        .count = 1,
+    };
+    ack.blocks[0] = blk;
+
+    var ack_buf: [1 + message_mod.PULL_ACK_MAX_BLOCKS * block_mod.BLOCK_SIZE]u8 = undefined;
+    const ack_len = try ack.encode(&ack_buf);
+    try node.route_network_message("127.0.0.1:7176", .pull_ack, ack_buf[0..ack_len]);
+
+    const info = node.store.get_account(&kp.public).?;
+    try testing.expectEqual(blk.hash(), info.frontier);
+    try testing.expectEqual(amount, info.balance);
+    try testing.expectEqual(@as(u64, 1), info.height);
 }
 
 test "node: sqlite reopen preserves node identity and wallet storage" {

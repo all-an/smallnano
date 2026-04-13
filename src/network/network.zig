@@ -31,6 +31,10 @@ pub const PeerAddress = peer_mod.PeerAddress;
 pub const Channel = channel_mod.Channel;
 pub const StateBlock = block_mod.StateBlock;
 pub const Vote = vote_mod.Vote;
+pub const PersistedPeer = struct {
+    address: []u8,
+    last_seen: i64,
+};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -194,6 +198,24 @@ pub const Network = struct {
         return self.peers.count();
     }
 
+    pub fn snapshot_peers(
+        self: *Network,
+        allocator: std.mem.Allocator,
+        out: *std.ArrayList(PersistedPeer),
+    ) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var it = self.peers.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.last_seen_sec <= 0) continue;
+            try out.append(allocator, .{
+                .address = try allocator.dupe(u8, entry.key_ptr.*),
+                .last_seen = entry.value_ptr.last_seen_sec,
+            });
+        }
+    }
+
     pub fn broadcast_keepalive(self: *Network) !usize {
         var frame: [message.HEADER_SIZE]u8 = undefined;
         const len = try message.encode_frame(self.config.network, .keepalive, "", &frame);
@@ -225,6 +247,20 @@ pub const Network = struct {
         const body = req.encode();
         var frame: [message.HEADER_SIZE + message.PULL_REQ_BODY_SIZE]u8 = undefined;
         const len = try message.encode_frame(self.config.network, .pull_req, &body, &frame);
+        try self.write_frame_to_peer(peer_addr, frame[0..len]);
+    }
+
+    pub fn send_pull_ack(self: *Network, peer_addr: []const u8, ack: *const message.PullAckBody) !void {
+        var body_buf: [1 + message.PULL_ACK_MAX_BLOCKS * block_mod.BLOCK_SIZE]u8 = undefined;
+        const body_len = try ack.encode(&body_buf);
+
+        var frame: [message.HEADER_SIZE + 1 + message.PULL_ACK_MAX_BLOCKS * block_mod.BLOCK_SIZE]u8 = undefined;
+        const len = try message.encode_frame(
+            self.config.network,
+            .pull_ack,
+            body_buf[0..body_len],
+            &frame,
+        );
         try self.write_frame_to_peer(peer_addr, frame[0..len]);
     }
 
@@ -309,7 +345,7 @@ pub const Network = struct {
                 while (it.next()) |p| {
                     if (p.is_dialable(now_sec)) {
                         to_dial.append(self.allocator, p.address) catch {};
-                        p.mark_connecting();
+                        p.mark_connecting(now_sec);
                     }
                 }
                 self.mutex.unlock();
@@ -327,7 +363,7 @@ pub const Network = struct {
                     self.allocator.destroy(ctx);
                     // Mark peer failed so it's retried next scan.
                     self.mutex.lock();
-                    if (self.peers.getPtr(addr.as_slice())) |p| p.mark_failed();
+                    if (self.peers.getPtr(addr.as_slice())) |p| p.mark_failed(std.time.timestamp());
                     self.mutex.unlock();
                 };
             }
@@ -356,6 +392,7 @@ pub const Network = struct {
         defer self.unregister_peer_stream(addr_str);
 
         self.register_peer_stream(addr_str, stream) catch {
+            std.log.warn("network: failed to register stream for {s}", .{addr_str});
             self.on_peer_failed(addr_str);
             return;
         };
@@ -372,10 +409,12 @@ pub const Network = struct {
 
         if (role == .initiator) {
             const frame = hs.initiate(self.config.network, random_cookie, &frame_buf) catch {
+                std.log.warn("network: initiate handshake failed for {s}", .{addr_str});
                 self.on_peer_failed(addr_str);
                 return;
             };
             ch.write_frame(frame[message.HEADER_SIZE..]) catch {
+                std.log.warn("network: failed to send handshake to {s}", .{addr_str});
                 self.on_peer_failed(addr_str);
                 return;
             };
@@ -385,6 +424,7 @@ pub const Network = struct {
         var recv_buf: [4096]u8 = undefined;
         while (!hs.is_complete() and !self.stop_requested.load(.acquire)) {
             const body = ch.read_frame(&recv_buf) catch {
+                std.log.warn("network: failed to read handshake frame from {s}", .{addr_str});
                 self.on_peer_failed(addr_str);
                 return;
             };
@@ -404,10 +444,12 @@ pub const Network = struct {
                     our_cookie,
                     &frame_buf,
                 ) catch {
+                    std.log.warn("network: responder handshake step failed for {s}", .{addr_str});
                     self.on_peer_failed(addr_str);
                     return;
                 };
                 ch.write_frame(result.send[message.HEADER_SIZE..]) catch {
+                    std.log.warn("network: failed to send handshake ack to {s}", .{addr_str});
                     self.on_peer_failed(addr_str);
                     return;
                 };
@@ -427,15 +469,18 @@ pub const Network = struct {
                         ack_body,
                         &reply_buf,
                     ) catch {
+                        std.log.warn("network: initiator ack verify failed for {s}", .{addr_str});
                         self.on_peer_failed(addr_str);
                         return;
                     };
                     ch.write_frame(result.send[message.HEADER_SIZE..]) catch {
+                        std.log.warn("network: failed to send final handshake ack to {s}", .{addr_str});
                         self.on_peer_failed(addr_str);
                         return;
                     };
                 } else {
                     _ = hs.recv_ack_responder(ack_body) catch {
+                        std.log.warn("network: responder final ack verify failed for {s}", .{addr_str});
                         self.on_peer_failed(addr_str);
                         return;
                     };
@@ -451,11 +496,13 @@ pub const Network = struct {
             }
             const key = self.find_peer_key(addr_str) orelse {
                 self.mutex.unlock();
+                std.log.warn("network: connected peer key vanished for {s}", .{addr_str});
                 self.on_peer_failed(addr_str);
                 return;
             };
             self.active_channels.put(key, stream) catch {
                 self.mutex.unlock();
+                std.log.warn("network: failed to promote active channel for {s}", .{addr_str});
                 self.on_peer_failed(addr_str);
                 return;
             };
@@ -496,7 +543,7 @@ pub const Network = struct {
 
     fn on_peer_failed(self: *Network, addr_str: []const u8) void {
         self.mutex.lock();
-        if (self.peers.getPtr(addr_str)) |p| p.mark_failed();
+        if (self.peers.getPtr(addr_str)) |p| p.mark_failed(std.time.timestamp());
         self.mutex.unlock();
     }
 
@@ -504,7 +551,13 @@ pub const Network = struct {
         self.mutex.lock();
         _ = self.peer_streams.remove(addr_str);
         _ = self.active_channels.remove(addr_str);
-        if (self.peers.getPtr(addr_str)) |p| p.mark_disconnected();
+        if (self.peers.getPtr(addr_str)) |p| {
+            if (self.stop_requested.load(.acquire)) {
+                p.mark_disconnected();
+            } else {
+                p.mark_failed(std.time.timestamp());
+            }
+        }
         self.mutex.unlock();
         std.log.info("network: peer disconnected: {s}", .{addr_str});
     }
@@ -565,7 +618,7 @@ pub const Network = struct {
         while (it.next()) |entry| {
             const ch = Channel.init(entry.value_ptr.*);
             ch.write_frame(frame) catch {
-                if (self.peers.getPtr(entry.key_ptr.*)) |p| p.mark_failed();
+                if (self.peers.getPtr(entry.key_ptr.*)) |p| p.mark_failed(std.time.timestamp());
                 continue;
             };
             sent += 1;
@@ -580,7 +633,7 @@ pub const Network = struct {
         const stream = self.active_channels.get(peer_addr) orelse return error.PeerNotConnected;
         const ch = Channel.init(stream);
         ch.write_frame(frame) catch {
-            if (self.peers.getPtr(peer_addr)) |p| p.mark_failed();
+            if (self.peers.getPtr(peer_addr)) |p| p.mark_failed(std.time.timestamp());
             return error.PeerNotConnected;
         };
     }
@@ -602,22 +655,23 @@ const InboundCtx = struct {
 };
 
 fn inbound_peer_thread(ctx: *InboundCtx) void {
-    defer ctx.net.track_worker_done();
-    defer ctx.net.allocator.destroy(ctx);
+    const net = ctx.net;
+    defer net.track_worker_done();
+    defer net.allocator.destroy(ctx);
     const addr_buf = std.fmt.allocPrint(
-        ctx.net.allocator,
+        net.allocator,
         "{f}",
         .{ctx.conn.address},
     ) catch {
         ctx.conn.stream.close();
         return;
     };
-    defer ctx.net.allocator.free(addr_buf);
+    defer net.allocator.free(addr_buf);
 
     // Register the peer (best-effort; might already be known).
-    ctx.net.add_known_peer(addr_buf) catch {};
+    net.add_known_peer(addr_buf) catch {};
 
-    ctx.net.run_peer(ctx.conn.stream, addr_buf, .responder);
+    net.run_peer(ctx.conn.stream, addr_buf, .responder);
 }
 
 const OutboundCtx = struct {
@@ -626,36 +680,28 @@ const OutboundCtx = struct {
 };
 
 fn outbound_peer_thread(ctx: *OutboundCtx) void {
-    defer ctx.net.track_worker_done();
-    defer ctx.net.allocator.destroy(ctx);
+    const net = ctx.net;
+    defer net.track_worker_done();
+    defer net.allocator.destroy(ctx);
     const addr_str = ctx.address.as_slice();
 
-    const net_addr = parse_peer_socket_address(addr_str) catch {
-        ctx.net.mutex.lock();
-        if (ctx.net.peers.getPtr(addr_str)) |p| p.mark_failed();
-        ctx.net.mutex.unlock();
+    const target = peer_mod.split_host_port(addr_str) catch {
+        std.log.warn("network: invalid peer address {s}", .{addr_str});
+        net.mutex.lock();
+        if (net.peers.getPtr(addr_str)) |p| p.mark_failed(std.time.timestamp());
+        net.mutex.unlock();
         return;
     };
 
-    const stream = std.net.tcpConnectToAddress(net_addr) catch {
-        ctx.net.mutex.lock();
-        if (ctx.net.peers.getPtr(addr_str)) |p| p.mark_failed();
-        ctx.net.mutex.unlock();
+    const stream = std.net.tcpConnectToHost(net.allocator, target.host, target.port) catch |err| {
+        std.log.warn("network: tcp connect failed for {s}: {}", .{ addr_str, err });
+        net.mutex.lock();
+        if (net.peers.getPtr(addr_str)) |p| p.mark_failed(std.time.timestamp());
+        net.mutex.unlock();
         return;
     };
 
-    ctx.net.run_peer(stream, addr_str, .initiator);
-}
-
-fn parse_peer_socket_address(addr_str: []const u8) !std.net.Address {
-    const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':') orelse return error.InvalidAddress;
-    const host = addr_str[0..colon];
-    const port = try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10);
-
-    if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') {
-        return std.net.Address.parseIp(host[1 .. host.len - 1], port);
-    }
-    return std.net.Address.parseIp(host, port);
+    net.run_peer(stream, addr_str, .initiator);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -911,4 +957,112 @@ test "network: send_pull_req targets one active peer" {
     const decoded = message.PullReqBody.decode(body[message.HEADER_SIZE .. message.HEADER_SIZE + message.PULL_REQ_BODY_SIZE][0..message.PULL_REQ_BODY_SIZE]);
     try std.testing.expectEqual(req.account, decoded.account);
     try std.testing.expectEqual(req.start_height, decoded.start_height);
+}
+
+test "network: send_pull_ack targets one active peer" {
+    const alloc = std.testing.allocator;
+    const kp = ed25519.KeyPair.generate();
+    const cb: OnMessageFn = struct {
+        fn f(_: *anyopaque, _: []const u8, _: message.MessageType, _: []const u8) void {}
+    }.f;
+    var dummy_ctx: u8 = 0;
+
+    var net = Network.init(alloc, .{
+        .max_peers = 3,
+        .network = .dev,
+        .node_keypair = kp,
+    }, cb, &dummy_ctx);
+    defer net.deinit();
+
+    var pair_a = try make_stream_pair();
+    defer pair_a[0].close();
+    defer pair_a[1].close();
+    var pair_b = try make_stream_pair();
+    defer pair_b[0].close();
+    defer pair_b[1].close();
+
+    try register_test_channel(&net, "127.0.0.1:7176", pair_a[0]);
+    try register_test_channel(&net, "127.0.0.1:7177", pair_b[0]);
+
+    const blk_a = StateBlock{
+        .account = [_]u8{0x31} ** 32,
+        .previous = [_]u8{0x32} ** 32,
+        .representative = [_]u8{0x33} ** 32,
+        .balance = 11,
+        .link = [_]u8{0x34} ** 32,
+        .work = 1,
+        .signature = [_]u8{0x35} ** 64,
+    };
+    const blk_b = StateBlock{
+        .account = [_]u8{0x41} ** 32,
+        .previous = [_]u8{0x42} ** 32,
+        .representative = [_]u8{0x43} ** 32,
+        .balance = 22,
+        .link = [_]u8{0x44} ** 32,
+        .work = 2,
+        .signature = [_]u8{0x45} ** 64,
+    };
+    var ack_blocks: [message.PULL_ACK_MAX_BLOCKS]StateBlock = undefined;
+    ack_blocks[0] = blk_a;
+    ack_blocks[1] = blk_b;
+    const ack = message.PullAckBody{
+        .blocks = ack_blocks,
+        .count = 2,
+    };
+    try net.send_pull_ack("127.0.0.1:7177", &ack);
+
+    var recv_buf: [2048]u8 = undefined;
+    const body = try Channel.init(pair_b[1]).read_frame(&recv_buf);
+    const hdr = try message.MessageHeader.decode(body[0..message.HEADER_SIZE]);
+    try std.testing.expectEqual(message.MessageType.pull_ack, hdr.msg_type);
+
+    const decoded = try message.PullAckBody.decode(body[message.HEADER_SIZE..]);
+    try std.testing.expectEqual(@as(u8, 2), decoded.count);
+    try std.testing.expectEqual(blk_a.account, decoded.blocks[0].account);
+    try std.testing.expectEqual(blk_b.balance, decoded.blocks[1].balance);
+}
+
+test "network: outbound invalid peer entry fails safely without crashing" {
+    const alloc = std.testing.allocator;
+    const kp = ed25519.KeyPair.generate();
+    const cb: OnMessageFn = struct {
+        fn f(_: *anyopaque, _: []const u8, _: message.MessageType, _: []const u8) void {}
+    }.f;
+    var dummy_ctx: u8 = 0;
+
+    var net = Network.init(alloc, .{
+        .max_peers = 4,
+        .network = .dev,
+        .node_keypair = kp,
+    }, cb, &dummy_ctx);
+    defer net.deinit();
+
+    const bad_peer = "bad peer:7176";
+    const key = try alloc.dupe(u8, bad_peer);
+    errdefer alloc.free(key);
+
+    var addr = PeerAddress{};
+    @memcpy(addr.buf[0..bad_peer.len], bad_peer);
+    addr.len = @intCast(bad_peer.len);
+    try net.peers.put(key, Peer.from_address(addr));
+
+    net.track_worker_start();
+    const ctx = try alloc.create(OutboundCtx);
+    ctx.* = .{
+        .net = &net,
+        .address = addr,
+    };
+
+    outbound_peer_thread(ctx);
+
+    net.mutex.lock();
+    defer net.mutex.unlock();
+    const peer = net.peers.getPtr(bad_peer).?;
+    try std.testing.expectEqual(@as(u32, 1), peer.fail_count);
+    try std.testing.expectEqual(peer_mod.PeerState.disconnected, peer.state);
+    try std.testing.expect(peer.retry_after_sec > 0);
+
+    net.worker_mutex.lock();
+    defer net.worker_mutex.unlock();
+    try std.testing.expectEqual(@as(usize, 0), net.active_worker_count);
 }

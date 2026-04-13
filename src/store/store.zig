@@ -37,6 +37,7 @@
 ///   -- Peers --
 ///   get_peers(allocator: Allocator, out: *std.ArrayList(PeerRow)) !void
 ///   put_peer(address: []const u8, last_seen: i64) !void
+///   delete_peer(address: []const u8) !void
 ///   delete_stale_peers(older_than: i64) !void
 ///
 ///   -- Pruning watermark --

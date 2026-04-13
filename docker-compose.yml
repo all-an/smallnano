@@ -1,0 +1,69 @@
+services:
+  node1:
+    build: .
+    container_name: smallnano-node1
+    environment:
+      SMALLNANO_WALLET_PASSWORD: devnet-pass
+    command:
+      [
+        "--config",
+        "/data/config.toml",
+        "--network",
+        "dev",
+        "--rpc-port",
+        "7177",
+        "--peering-port",
+        "7176",
+      ]
+    ports:
+      - "7176:7176"
+      - "7177:7177"
+    volumes:
+      - ./devnet/node1:/data
+    restart: unless-stopped
+
+  node2:
+    build: .
+    container_name: smallnano-node2
+    environment:
+      SMALLNANO_WALLET_PASSWORD: devnet-pass
+    command:
+      [
+        "--config",
+        "/data/config.toml",
+        "--network",
+        "dev",
+        "--rpc-port",
+        "7277",
+        "--peering-port",
+        "7276",
+      ]
+    ports:
+      - "7276:7276"
+      - "7277:7277"
+    volumes:
+      - ./devnet/node2:/data
+    restart: unless-stopped
+
+  node3:
+    build: .
+    container_name: smallnano-node3
+    environment:
+      SMALLNANO_WALLET_PASSWORD: devnet-pass
+    command:
+      [
+        "--config",
+        "/data/config.toml",
+        "--network",
+        "dev",
+        "--rpc-port",
+        "7377",
+        "--peering-port",
+        "7376",
+      ]
+    ports:
+      - "7376:7376"
+      - "7377:7377"
+    volumes:
+      - ./devnet/node3:/data
+    restart: unless-stopped

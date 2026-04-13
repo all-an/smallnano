@@ -1,7 +1,7 @@
 /// Peer — address, connection state, and ban management for smallnano.
 ///
 /// A Peer is the node's view of one remote participant. It holds:
-///   - The remote's TCP address (ip:port string + parsed form)
+///   - The remote's TCP address (`host:port` string + parsed form)
 ///   - Connection state machine
 ///   - Authenticated node identity (once handshake completes)
 ///   - Ban tracking (timestamp-based, no allocations)
@@ -12,27 +12,25 @@ const std = @import("std");
 // ── PeerAddress ───────────────────────────────────────────────────────────────
 
 pub const PeerAddress = struct {
-    /// Null-terminated "ip:port" string stored inline (max 47 chars + null).
-    /// IPv4: "255.255.255.255:65535"  (21 chars)
-    /// IPv6: "[ffff:...:ffff]:65535"  (47 chars)
-    buf: [48]u8 = [_]u8{0} ** 48,
+    /// Null-terminated `host:port` string stored inline.
+    ///
+    /// This accepts:
+    /// - IPv4 literals: `192.0.2.10:7176`
+    /// - bracketed IPv6 literals: `[2001:db8::10]:7176`
+    /// - hostname-style peers such as Docker service names: `node2:7276`
+    ///
+    /// The storage budget keeps room for the longest DNS hostname plus `:65535`.
+    buf: [272]u8 = [_]u8{0} ** 272,
     len: u8 = 0,
 
     pub const ParseError = error{ InvalidFormat, PortOutOfRange };
 
     /// Parse "host:port" into a PeerAddress. Does NOT resolve DNS.
     pub fn parse(s: []const u8) ParseError!PeerAddress {
-        if (s.len == 0 or s.len > 47) return ParseError.InvalidFormat;
-
-        // Find last ':' to split host from port.
-        const colon = std.mem.lastIndexOfScalar(u8, s, ':') orelse
+        if (s.len == 0 or s.len > std.math.maxInt(u8) or s.len >= 272) {
             return ParseError.InvalidFormat;
-        if (colon == 0 or colon + 1 >= s.len) return ParseError.InvalidFormat;
-
-        const port_str = s[colon + 1 ..];
-        const port = std.fmt.parseInt(u16, port_str, 10) catch
-            return ParseError.PortOutOfRange;
-        _ = port;
+        }
+        _ = try split_host_port(s);
 
         var addr = PeerAddress{};
         @memcpy(addr.buf[0..s.len], s);
@@ -49,6 +47,44 @@ pub const PeerAddress = struct {
             std.mem.eql(u8, self.buf[0..self.len], other.buf[0..other.len]);
     }
 };
+
+pub const HostPort = struct {
+    host: []const u8,
+    port: u16,
+};
+
+pub fn split_host_port(s: []const u8) PeerAddress.ParseError!HostPort {
+    const colon = std.mem.lastIndexOfScalar(u8, s, ':') orelse return error.InvalidFormat;
+    if (colon == 0 or colon + 1 >= s.len) return error.InvalidFormat;
+
+    const port = std.fmt.parseInt(u16, s[colon + 1 ..], 10) catch return error.PortOutOfRange;
+    const host = s[0..colon];
+    if (host.len == 0) return error.InvalidFormat;
+
+    if (host[0] == '[') {
+        if (host.len < 3 or host[host.len - 1] != ']') return error.InvalidFormat;
+        return .{
+            .host = host[1 .. host.len - 1],
+            .port = port,
+        };
+    }
+
+    if (std.mem.indexOfScalar(u8, host, ':') != null) return error.InvalidFormat;
+    if (!is_valid_hostname(host)) return error.InvalidFormat;
+
+    return .{
+        .host = host,
+        .port = port,
+    };
+}
+
+fn is_valid_hostname(host: []const u8) bool {
+    for (host) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '.' or ch == '_') continue;
+        return false;
+    }
+    return true;
+}
 
 // ── PeerState ─────────────────────────────────────────────────────────────────
 
@@ -72,6 +108,8 @@ pub const Peer = struct {
     state: PeerState = .disconnected,
     /// Unix timestamp (seconds) of last received message. 0 = never.
     last_seen_sec: i64 = 0,
+    /// Earliest timestamp when the peer may be dialed again.
+    retry_after_sec: i64 = 0,
     /// Unix timestamp (seconds) when the ban expires. 0 = not banned.
     ban_until_sec: i64 = 0,
     /// Authenticated Ed25519 node identity. Populated after handshake.
@@ -87,8 +125,9 @@ pub const Peer = struct {
 
     // ── State transitions ─────────────────────────────────────────────────────
 
-    pub fn mark_connecting(self: *Peer) void {
+    pub fn mark_connecting(self: *Peer, now_sec: i64) void {
         self.state = .connecting;
+        self.retry_after_sec = now_sec;
     }
 
     pub fn mark_handshaking(self: *Peer) void {
@@ -99,6 +138,7 @@ pub const Peer = struct {
         self.state = .connected;
         self.node_id = node_id;
         self.last_seen_sec = now_sec;
+        self.retry_after_sec = 0;
         self.fail_count = 0;
     }
 
@@ -107,10 +147,11 @@ pub const Peer = struct {
         self.node_id = null;
     }
 
-    pub fn mark_failed(self: *Peer) void {
+    pub fn mark_failed(self: *Peer, now_sec: i64) void {
         self.state = .disconnected;
         self.node_id = null;
         self.fail_count +|= 1; // saturating add
+        self.retry_after_sec = now_sec + @as(i64, retry_backoff_sec(self.fail_count));
     }
 
     pub fn touch(self: *Peer, now_sec: i64) void {
@@ -144,7 +185,9 @@ pub const Peer = struct {
     // ── Queries ───────────────────────────────────────────────────────────────
 
     pub fn is_dialable(self: *const Peer, now_sec: i64) bool {
-        return self.state == .disconnected and !self.is_banned(now_sec);
+        return self.state == .disconnected and
+            !self.is_banned(now_sec) and
+            now_sec >= self.retry_after_sec;
     }
 
     pub fn is_active(self: *const Peer) bool {
@@ -155,6 +198,13 @@ pub const Peer = struct {
     pub fn idle_secs(self: *const Peer, now_sec: i64) ?i64 {
         if (self.last_seen_sec == 0) return null;
         return now_sec - self.last_seen_sec;
+    }
+
+    fn retry_backoff_sec(fail_count: u32) u32 {
+        if (fail_count == 0) return 0;
+        const shift = @min(fail_count - 1, 30);
+        const unbounded = @as(u32, 1) << @intCast(shift);
+        return @min(unbounded, 300);
     }
 };
 
@@ -170,12 +220,27 @@ test "peer_address: parse valid IPv6-style (bracket)" {
     try std.testing.expectEqualStrings("[::1]:7176", addr.as_slice());
 }
 
+test "peer_address: parse valid hostname peer" {
+    const addr = try PeerAddress.parse("node2:7276");
+    try std.testing.expectEqualStrings("node2:7276", addr.as_slice());
+}
+
+test "peer_address: split hostname and port" {
+    const parsed = try split_host_port("smallnano-node-3:7376");
+    try std.testing.expectEqualStrings("smallnano-node-3", parsed.host);
+    try std.testing.expectEqual(@as(u16, 7376), parsed.port);
+}
+
 test "peer_address: rejects missing colon" {
     try std.testing.expectError(PeerAddress.ParseError.InvalidFormat, PeerAddress.parse("192.168.1.1"));
 }
 
 test "peer_address: rejects empty string" {
     try std.testing.expectError(PeerAddress.ParseError.InvalidFormat, PeerAddress.parse(""));
+}
+
+test "peer_address: rejects hostname with invalid characters" {
+    try std.testing.expectError(PeerAddress.ParseError.InvalidFormat, PeerAddress.parse("bad peer:7176"));
 }
 
 test "peer_address: rejects port that is not a number" {
@@ -205,7 +270,7 @@ test "peer: state transitions: disconnected → connecting → handshaking → c
     const addr = try PeerAddress.parse("1.2.3.4:7176");
     var p = Peer.from_address(addr);
 
-    p.mark_connecting();
+    p.mark_connecting(1000);
     try std.testing.expectEqual(PeerState.connecting, p.state);
 
     p.mark_handshaking();
@@ -230,10 +295,12 @@ test "peer: mark_disconnected clears node_id" {
 test "peer: mark_failed increments fail_count" {
     const addr = try PeerAddress.parse("1.2.3.4:7176");
     var p = Peer.from_address(addr);
-    p.mark_failed();
+    p.mark_failed(1000);
     try std.testing.expectEqual(@as(u32, 1), p.fail_count);
-    p.mark_failed();
+    try std.testing.expectEqual(@as(i64, 1001), p.retry_after_sec);
+    p.mark_failed(1001);
     try std.testing.expectEqual(@as(u32, 2), p.fail_count);
+    try std.testing.expectEqual(@as(i64, 1003), p.retry_after_sec);
 }
 
 test "peer: ban / is_banned / try_unban lifecycle" {
@@ -262,7 +329,7 @@ test "peer: is_dialable only when disconnected and not banned" {
 
     try std.testing.expect(p.is_dialable(now));
 
-    p.mark_connecting();
+    p.mark_connecting(now);
     try std.testing.expect(!p.is_dialable(now));
 
     p.mark_disconnected();
@@ -271,6 +338,24 @@ test "peer: is_dialable only when disconnected and not banned" {
     try std.testing.expect(!p.is_dialable(now + 29));
     _ = p.try_unban(now + 30);
     try std.testing.expect(p.is_dialable(now + 30));
+}
+
+test "peer: failed peers back off exponentially with an upper bound" {
+    const addr = try PeerAddress.parse("1.2.3.4:7176");
+    var p = Peer.from_address(addr);
+    const now: i64 = 1000;
+
+    p.mark_failed(now);
+    try std.testing.expect(!p.is_dialable(now));
+    try std.testing.expect(p.is_dialable(now + 1));
+
+    p.mark_failed(now + 1);
+    try std.testing.expect(!p.is_dialable(now + 2));
+    try std.testing.expect(p.is_dialable(now + 3));
+
+    p.fail_count = 20;
+    p.mark_failed(now + 10);
+    try std.testing.expectEqual(@as(i64, now + 310), p.retry_after_sec);
 }
 
 test "peer: idle_secs returns null when never seen" {

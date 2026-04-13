@@ -10,6 +10,7 @@
 /// disk and the next run continues from that persisted state.
 const std = @import("std");
 const block_mod = @import("../types/block.zig");
+const message = @import("../network/message.zig");
 const server_mod = @import("server.zig");
 
 const StateBlock = block_mod.StateBlock;
@@ -37,6 +38,23 @@ pub fn BootstrapClient(comptime StoreType: type, comptime LedgerType: type) type
                 .store = store,
                 .ledger = ledger,
             };
+        }
+
+        /// Apply one decoded `PullAck` body through the same backlog replay
+        /// rules used by full bootstrap sync. This lets the live node runtime
+        /// reuse the existing bootstrap semantics for network-delivered block
+        /// windows without duplicating ledger replay logic.
+        pub fn apply_pull_ack(self: *Self, body: *const message.PullAckBody) !u64 {
+            var backlog = std.ArrayList(StateBlock){};
+            defer backlog.deinit(self.allocator);
+
+            var i: usize = 0;
+            while (i < body.count) : (i += 1) {
+                try backlog.append(self.allocator, body.blocks[i]);
+            }
+
+            _ = try self.replay_backlog_best_effort(&backlog);
+            return self.replay_backlog_strict(&backlog);
         }
 
         /// Sync from one peer-like source.
@@ -155,7 +173,6 @@ pub fn BootstrapClient(comptime StoreType: type, comptime LedgerType: type) type
 
 const testing = std.testing;
 const inserter = @import("../ledger/inserter.zig");
-const message = @import("../network/message.zig");
 const NullStore = @import("../store/null_store.zig").NullStore;
 const BootstrapServer = server_mod.BootstrapServer;
 

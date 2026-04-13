@@ -60,7 +60,7 @@ pub fn main() !void {
     var stdout_buffer: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
 
-    const config = config_mod.load(allocator, args[1..]) catch |err| switch (err) {
+    const load_result = config_mod.load_with_state(allocator, args[1..]) catch |err| switch (err) {
         error.HelpRequested => {
             const help = try config_mod.help_text(allocator, args[0]);
             defer allocator.free(help);
@@ -70,6 +70,7 @@ pub fn main() !void {
         },
         else => return err,
     };
+    const config = load_result.config;
 
     const wallet_password = try load_wallet_password(allocator);
     defer {
@@ -81,6 +82,11 @@ pub fn main() !void {
 
     var node = try node_mod.SqliteNode.init(allocator, config, wallet_password);
     defer node.deinit();
+
+    const setup_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/setup", .{
+        node.config.rpc_port,
+    });
+    defer allocator.free(setup_url);
 
     std.log.info("smallnano configuration loaded from {s}", .{node.config.config_path});
     std.log.info(
@@ -100,6 +106,17 @@ pub fn main() !void {
 
     try node.start();
     std.log.info("node runtime started; waiting for shutdown signal", .{});
+    std.log.info("local setup page: {s}", .{setup_url});
+
+    if (load_result.created_default_config) {
+        std.log.info("first run detected; opening the setup page in your browser", .{});
+        open_setup_page(allocator, setup_url) catch |err| {
+            std.log.warn("could not open browser automatically: {} (open {s} manually)", .{
+                err,
+                setup_url,
+            });
+        };
+    }
 
     wait_for_shutdown();
 
@@ -188,6 +205,21 @@ fn load_wallet_password(allocator: std.mem.Allocator) ![]u8 {
         },
         else => return err,
     };
+}
+
+fn open_setup_page(allocator: std.mem.Allocator, url: []const u8) !void {
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &.{ "cmd", "/c", "start", "", url },
+        .macos => &.{ "open", url },
+        .linux, .freebsd, .openbsd, .netbsd, .dragonfly, .solaris, .illumos, .haiku, .serenity => &.{ "xdg-open", url },
+        else => return error.UnsupportedPlatform,
+    };
+
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
 }
 
 test "main: request_shutdown flips the shutdown flag" {

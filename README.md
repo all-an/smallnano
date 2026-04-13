@@ -41,11 +41,16 @@ Requires Zig 0.15+. No other dependencies to install — SQLite is vendored.
 ## Run
 
 ```sh
-zig build run -- node run --network=main
-zig build run -- node run --network=dev --max-blocks-per-account=500
+zig build
+./zig-out/bin/smallnano
+./zig-out/bin/smallnano --network=dev --max-blocks-per-account=500
 ```
 
-Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, and starts/stops the owned network and RPC workers cleanly. Multi-node peer persistence, bootstrap policy, and final devnet validation are still pending. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
+On the first run, `smallnano` creates the default config automatically, starts
+the node, and tries to open `http://127.0.0.1:<rpc-port>/setup` in your browser.
+After saving the config there, restart the node once to apply the new values.
+
+Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, starts/stops the owned network and RPC workers cleanly, restores/persists known peers with bounded reconnect backoff, and routes inbound `publish`, `vote`, `pull_req`, and `pull_ack` traffic through the node-owned runtime. Final multi-node devnet proof is still pending. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
 
 ## Status
 
@@ -59,7 +64,7 @@ Current runtime note: the binary now loads config, initializes the node runtime,
 | M6 — Bootstrap | module-complete, integration pending |
 | M7 — Wallet & key management | module-complete, integration pending |
 | M8 — JSON-RPC API | module-complete, integration pending |
-| M9 — Configuration & CLI | config complete, runtime pending |
+| M9 — Configuration & CLI | config complete, multi-node validation pending |
 | M10 — Hardening & CI | in progress |
 | M11 — Node runtime wiring | ✅ Done |
 | M12 — Peer relay & bootstrap config | in progress |

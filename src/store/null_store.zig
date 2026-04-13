@@ -243,6 +243,12 @@ pub const NullStore = struct {
         result.value_ptr.* = last_seen;
     }
 
+    pub fn delete_peer(self: *NullStore, address: []const u8) !void {
+        if (self.peers.fetchRemove(address)) |kv| {
+            self.allocator.free(kv.key);
+        }
+    }
+
     pub fn delete_stale_peers(self: *NullStore, older_than: i64) !void {
         var to_delete = std.ArrayList([]const u8){};
         defer to_delete.deinit(self.allocator);
@@ -452,6 +458,24 @@ test "null_store: peers put, get, delete stale" {
     // Only timestamp 2000 should survive.
     try std.testing.expectEqual(@as(usize, 1), peer_list.items.len);
     try std.testing.expectEqual(@as(i64, 2000), peer_list.items[0].last_seen);
+}
+
+test "null_store: delete_peer removes one saved peer" {
+    var s = NullStore.init(std.testing.allocator);
+    defer s.deinit();
+
+    try s.put_peer("192.168.1.1:7176", 1000);
+    try s.put_peer("192.168.1.2:7176", 2000);
+    try s.delete_peer("192.168.1.1:7176");
+
+    var peer_list = std.ArrayList(PeerRow){};
+    defer {
+        for (peer_list.items) |p| std.testing.allocator.free(p.address);
+        peer_list.deinit(std.testing.allocator);
+    }
+    try s.get_peers(std.testing.allocator, &peer_list);
+    try std.testing.expectEqual(@as(usize, 1), peer_list.items.len);
+    try std.testing.expectEqualStrings("192.168.1.2:7176", peer_list.items[0].address);
 }
 
 test "null_store: for_each_account visits all accounts" {

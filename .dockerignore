@@ -1,7 +1,14 @@
 .git
 .github
 .zig-cache
+.zig-cache-*
+.zig-global
+.zig-global-*
 zig-out
+devnet
 rsnano-node
 draft.md
-web.db
+test-net.md
+*.db
+*.sqlite
+*.sqlite3

@@ -84,6 +84,41 @@ pub const NodeConfig = struct {
         allocator.free(self.config_path);
     }
 
+    pub fn clone(self: *const NodeConfig, allocator: std.mem.Allocator) !NodeConfig {
+        var next = NodeConfig{
+            .config_path = try allocator.dupe(u8, self.config_path),
+            .data_dir = try allocator.dupe(u8, self.data_dir),
+            .listen_address = try allocator.dupe(u8, self.listen_address),
+            .external_address = null,
+            .peer_seeds = .empty,
+            .bootstrap_peers = .empty,
+            .max_blocks_per_account = self.max_blocks_per_account,
+            .max_peers = self.max_peers,
+            .work_threads = self.work_threads,
+            .rpc_port = self.rpc_port,
+            .peering_port = self.peering_port,
+            .network = self.network,
+            .bandwidth_limit_mbps = self.bandwidth_limit_mbps,
+            .max_pending_elections = self.max_pending_elections,
+            .enable_voting = self.enable_voting,
+            .log_level = self.log_level,
+        };
+        errdefer next.deinit(allocator);
+
+        if (self.external_address) |addr| {
+            next.external_address = try allocator.dupe(u8, addr);
+        }
+
+        for (self.peer_seeds.items) |peer| {
+            try next.peer_seeds.append(allocator, try allocator.dupe(u8, peer));
+        }
+        for (self.bootstrap_peers.items) |peer| {
+            try next.bootstrap_peers.append(allocator, try allocator.dupe(u8, peer));
+        }
+
+        return next;
+    }
+
     pub fn validate(self: *const NodeConfig) ValidationError!void {
         if (self.max_blocks_per_account == 0) return ValidationError.InvalidMaxBlocksPerAccount;
         if (self.data_dir.len == 0) return ValidationError.InvalidDataDir;
@@ -105,6 +140,115 @@ pub const NodeConfig = struct {
         if (self.bandwidth_limit_mbps == 0) return ValidationError.InvalidBandwidthLimitMbps;
         if (self.max_pending_elections == 0) return ValidationError.InvalidMaxPendingElections;
     }
+
+    pub fn render_text(self: *const NodeConfig, allocator: std.mem.Allocator) ![]u8 {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(allocator);
+
+        try out.writer(allocator).print(
+            \\# smallnano operator configuration
+            \\# Saved by the local setup page or CLI.
+            \\
+            \\# Ledger, wallet metadata, and peer cache directory.
+            \\data_dir = "{s}"
+            \\
+            \\# P2P and RPC bind address (IP literal).
+            \\listen_address = "{s}"
+            \\
+        ,
+            .{ self.data_dir, self.listen_address },
+        );
+
+        if (self.external_address) |addr| {
+            try out.writer(allocator).print(
+                \\# Optional advertised public IP.
+                \\external_address = "{s}"
+                \\
+            ,
+                .{addr},
+            );
+        } else {
+            try out.writer(allocator).writeAll(
+                \\# Optional advertised public IP.
+                \\# external_address = "203.0.113.10"
+                \\
+            );
+        }
+
+        try out.writer(allocator).writeAll(
+            \\# Seed peers contacted on startup.
+            \\peer_seeds = 
+        );
+        try render_string_array(&out, allocator, self.peer_seeds.items);
+        try out.writer(allocator).writeAll(
+            \\
+            \\
+            \\# Preferred peers for explicit bootstrap pulls.
+            \\bootstrap_peers = 
+        );
+        try render_string_array(&out, allocator, self.bootstrap_peers.items);
+        try out.writer(allocator).print(
+            \\
+            \\
+            \\# Ledger pruning depth per account.
+            \\max_blocks_per_account = {d}
+            \\
+            \\# Maximum simultaneous peer connections.
+            \\max_peers = {d}
+            \\
+            \\# CPU threads used for local proof-of-work generation.
+            \\work_threads = {d}
+            \\
+            \\# JSON-RPC HTTP port.
+            \\rpc_port = {d}
+            \\
+            \\# P2P peering port.
+            \\peering_port = {d}
+            \\
+            \\# Network: "main", "beta", or "dev".
+            \\network = "{s}"
+            \\
+            \\# Combined bandwidth cap in megabits per second.
+            \\bandwidth_limit_mbps = {d}
+            \\
+            \\# Maximum active elections kept in memory.
+            \\max_pending_elections = {d}
+            \\
+            \\# Opt in to voting as a representative.
+            \\enable_voting = {s}
+            \\
+            \\# Log level: "err", "warn", "info", or "debug".
+            \\log_level = "{s}"
+            \\
+        ,
+            .{
+                self.max_blocks_per_account,
+                self.max_peers,
+                self.work_threads,
+                self.rpc_port,
+                self.peering_port,
+                @tagName(self.network),
+                self.bandwidth_limit_mbps,
+                self.max_pending_elections,
+                if (self.enable_voting) "true" else "false",
+                @tagName(self.log_level),
+            },
+        );
+
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn save(self: *const NodeConfig, allocator: std.mem.Allocator) !void {
+        try self.validate();
+
+        if (std.fs.path.dirname(self.config_path)) |dir_path| {
+            try make_path(dir_path);
+        }
+
+        const contents = try self.render_text(allocator);
+        defer allocator.free(contents);
+        try write_text_file(self.config_path, contents);
+    }
 };
 
 pub const LoadError = NodeConfig.ValidationError || ParseError || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.Dir.StatFileError || std.fs.File.ReadError || std.fs.File.WriteError || std.fs.Dir.WriteFileError || error{
@@ -113,6 +257,11 @@ pub const LoadError = NodeConfig.ValidationError || ParseError || std.mem.Alloca
     MissingFlagValue,
     UnknownFlag,
     InvalidCommand,
+};
+
+pub const LoadResult = struct {
+    config: NodeConfig,
+    created_default_config: bool,
 };
 
 const CliOverrides = struct {
@@ -152,6 +301,11 @@ pub const ParseError = error{
 };
 
 pub fn load(allocator: std.mem.Allocator, cli_args: []const []const u8) LoadError!NodeConfig {
+    const result = try load_with_state(allocator, cli_args);
+    return result.config;
+}
+
+pub fn load_with_state(allocator: std.mem.Allocator, cli_args: []const []const u8) LoadError!LoadResult {
     var cli = try parse_cli(allocator, cli_args);
     defer cli.deinit(allocator);
     if (cli.help_requested) return error.HelpRequested;
@@ -162,7 +316,7 @@ pub fn load(allocator: std.mem.Allocator, cli_args: []const []const u8) LoadErro
         try default_config_path(allocator);
     errdefer allocator.free(config_path);
 
-    try ensure_default_config(allocator, config_path);
+    const created_default_config = try ensure_default_config(allocator, config_path);
 
     var config = try NodeConfig.init(allocator, config_path);
 
@@ -172,7 +326,10 @@ pub fn load(allocator: std.mem.Allocator, cli_args: []const []const u8) LoadErro
     try parse_config_text(allocator, &config, contents);
     try apply_cli_overrides(allocator, &config, cli);
     try config.validate();
-    return config;
+    return .{
+        .config = config,
+        .created_default_config = created_default_config,
+    };
 }
 
 pub fn help_text(allocator: std.mem.Allocator, program_name: []const u8) ![]u8 {
@@ -194,8 +351,8 @@ pub fn help_text(allocator: std.mem.Allocator, program_name: []const u8) ![]u8 {
         \\  --data-dir <path>                  Ledger / peer storage directory
         \\  --listen-address <ip>              Bind address for P2P and RPC
         \\  --external-address <ip>            Advertised public IP
-        \\  --peer-seed <ip:port>              Seed peer; repeatable
-        \\  --bootstrap-peer <ip:port>         Preferred bootstrap peer; repeatable
+        \\  --peer-seed <host:port>            Seed peer; repeatable
+        \\  --bootstrap-peer <host:port>       Preferred bootstrap peer; repeatable
         \\  --max-blocks-per-account <u32>     Default: 1000
         \\  --max-peers <u32>                  Default: 50
         \\  --work-threads <u32>               Default: 1
@@ -210,7 +367,7 @@ pub fn help_text(allocator: std.mem.Allocator, program_name: []const u8) ![]u8 {
         \\  -h, --help                         Show this help
         \\
         \\Examples:
-        \\  {s} node run --network dev --peer-seed 192.0.2.10:7176
+        \\  {s} --network dev --peer-seed 192.0.2.10:7176
         \\  {s} --rpc-port 8080 --enable-voting
         \\
     ,
@@ -458,8 +615,8 @@ fn default_data_dir(allocator: std.mem.Allocator, config_path: []const u8) ![]u8
     return allocator.dupe(u8, ".");
 }
 
-fn ensure_default_config(allocator: std.mem.Allocator, config_path: []const u8) !void {
-    if (path_exists(config_path)) return;
+fn ensure_default_config(allocator: std.mem.Allocator, config_path: []const u8) !bool {
+    if (path_exists(config_path)) return false;
 
     if (std.fs.path.dirname(config_path)) |dir_path| {
         try make_path(dir_path);
@@ -471,6 +628,7 @@ fn ensure_default_config(allocator: std.mem.Allocator, config_path: []const u8) 
     const contents = try default_config_text(allocator, data_dir);
     defer allocator.free(contents);
     try write_text_file(config_path, contents);
+    return true;
 }
 
 fn path_exists(path: []const u8) bool {
@@ -503,6 +661,19 @@ fn write_text_file(path: []const u8, contents: []const u8) !void {
         .data = contents,
         .flags = .{ .truncate = true },
     });
+}
+
+fn render_string_array(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    values: []const []const u8,
+) !void {
+    try out.writer(allocator).writeByte('[');
+    for (values, 0..) |value, i| {
+        if (i != 0) try out.writer(allocator).writeAll(", ");
+        try out.writer(allocator).print("\"{s}\"", .{value});
+    }
+    try out.writer(allocator).writeByte(']');
 }
 
 fn make_path(path: []const u8) !void {
@@ -717,6 +888,36 @@ test "config: parses generated defaults" {
     try testing.expectEqual(LogLevel.info, config.log_level);
 }
 
+test "config: clone and render_text preserve editable fields" {
+    var config = try NodeConfig.init(testing.allocator, try testing.allocator.dupe(u8, "test-config.toml"));
+    defer config.deinit(testing.allocator);
+
+    try replace_owned_string(testing.allocator, &config.data_dir, "./devnet/data");
+    try replace_owned_string(testing.allocator, &config.listen_address, "0.0.0.0");
+    try replace_optional_string(testing.allocator, &config.external_address, "192.168.1.10");
+    try config.peer_seeds.append(testing.allocator, try testing.allocator.dupe(u8, "192.168.1.11:7276"));
+    try config.bootstrap_peers.append(testing.allocator, try testing.allocator.dupe(u8, "192.168.1.12:7376"));
+    config.network = .dev;
+    config.rpc_port = 7277;
+    config.peering_port = 7276;
+    config.enable_voting = true;
+    config.log_level = .debug;
+
+    var cloned = try config.clone(testing.allocator);
+    defer cloned.deinit(testing.allocator);
+
+    const text = try cloned.render_text(testing.allocator);
+    defer testing.allocator.free(text);
+
+    try testing.expect(std.mem.indexOf(u8, text, "data_dir = \"./devnet/data\"") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "external_address = \"192.168.1.10\"") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "peer_seeds = [\"192.168.1.11:7276\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "bootstrap_peers = [\"192.168.1.12:7376\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "network = \"dev\"") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "enable_voting = true") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "log_level = \"debug\"") != null);
+}
+
 test "config: load writes default file when missing and applies cli overrides" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -756,6 +957,58 @@ test "config: load writes default file when missing and applies cli overrides" {
     try testing.expect(std.mem.indexOf(u8, contents, "data_dir = ") != null);
     try testing.expect(std.mem.indexOf(u8, contents, "peer_seeds = []") != null);
     try testing.expect(std.mem.indexOf(u8, contents, "log_level = \"info\"") != null);
+}
+
+test "config: load_with_state reports first-run default config creation" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const rel_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/config.toml",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(rel_path);
+
+    var first = try load_with_state(testing.allocator, &.{ "--config", rel_path });
+    defer first.config.deinit(testing.allocator);
+    try testing.expect(first.created_default_config);
+
+    var second = try load_with_state(testing.allocator, &.{ "--config", rel_path });
+    defer second.config.deinit(testing.allocator);
+    try testing.expect(!second.created_default_config);
+}
+
+test "config: save writes edited configuration to disk" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const config_path = try std.fmt.allocPrint(
+        testing.allocator,
+        ".zig-cache/tmp/{s}/config.toml",
+        .{tmp.sub_path},
+    );
+    defer testing.allocator.free(config_path);
+
+    var config = try NodeConfig.init(testing.allocator, try testing.allocator.dupe(u8, config_path));
+    defer config.deinit(testing.allocator);
+
+    try replace_owned_string(testing.allocator, &config.data_dir, ".zig-cache/tmp/test-devnet");
+    try replace_optional_string(testing.allocator, &config.external_address, "192.168.1.55");
+    try config.peer_seeds.append(testing.allocator, try testing.allocator.dupe(u8, "192.168.1.11:7276"));
+    config.network = .dev;
+    config.rpc_port = 9191;
+    config.peering_port = 9192;
+
+    try config.save(testing.allocator);
+
+    const contents = try tmp.dir.readFileAlloc(testing.allocator, "config.toml", 16 * 1024);
+    defer testing.allocator.free(contents);
+
+    try testing.expect(std.mem.indexOf(u8, contents, "external_address = \"192.168.1.55\"") != null);
+    try testing.expect(std.mem.indexOf(u8, contents, "peer_seeds = [\"192.168.1.11:7276\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, contents, "rpc_port = 9191") != null);
+    try testing.expect(std.mem.indexOf(u8, contents, "peering_port = 9192") != null);
 }
 
 test "config: parses file values and strips inline comments" {
@@ -798,7 +1051,7 @@ test "config: help text lists the operator flags" {
     defer testing.allocator.free(text);
 
     try testing.expect(std.mem.indexOf(u8, text, "--data-dir <path>") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "--peer-seed <ip:port>") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "--peer-seed <host:port>") != null);
     try testing.expect(std.mem.indexOf(u8, text, "--max-blocks-per-account <u32>") != null);
     try testing.expect(std.mem.indexOf(u8, text, "--network <main|beta|dev>") != null);
     try testing.expect(std.mem.indexOf(u8, text, "--enable-voting") != null);
@@ -845,6 +1098,15 @@ test "config: cli repeats replace peer seed lists" {
     try testing.expectEqual(@as(usize, 2), config.peer_seeds.items.len);
     try testing.expectEqualStrings("[2001:db8::30]:7176", config.peer_seeds.items[1]);
     try testing.expectEqual(@as(usize, 1), config.bootstrap_peers.items.len);
+}
+
+test "config: validation accepts hostname peer seeds" {
+    var config = try NodeConfig.init(testing.allocator, try testing.allocator.dupe(u8, "test-config.toml"));
+    defer config.deinit(testing.allocator);
+
+    try replace_string_list(testing.allocator, &config.peer_seeds, &.{"node2:7276"});
+    try replace_string_list(testing.allocator, &config.bootstrap_peers, &.{"smallnano-node-3:7376"});
+    try config.validate();
 }
 
 test "config: validation rejects invalid peer seed and listen address" {

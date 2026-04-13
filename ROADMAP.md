@@ -281,10 +281,15 @@ Sub-steps:
 2. [x] Track active peer channels so the node can broadcast or target messages after handshake completion
 3. [x] Extend `src/config.zig` with peer-seed, bootstrap-peer, listen-address, external-address, and data-dir settings
 4. [x] Bring up the RPC worker as part of the real long-running node runtime and coordinate network + RPC + owned subsystem start/stop in one live path
-5. [ ] Persist peer discovery state safely and bound retry/backoff behavior for low-resource machines
-6. [ ] Add tests covering outbound relay, peer selection, bootstrap resume, config parsing/validation, and coordinated runtime start/stop
-7. [ ] Run `zig build test` — fix until green
-8. [ ] `zig fmt src/` + final test run
+5. [x] Persist peer discovery state safely and bound retry/backoff behavior for low-resource machines
+6. [x] Add tests covering outbound relay, peer selection, bootstrap resume, config parsing/validation, and coordinated runtime start/stop
+7. [x] Run `zig build test` — fix until green
+8. [x] `zig fmt src/` + final test run
+
+**Current status:** Peer discovery persistence, bounded reconnect backoff, and
+the node-owned inbound `publish` / `vote` / `pull_req` / `pull_ack` routing are
+implemented and unit-tested. The remaining work is proving the same behavior
+across a real three-node devnet, which belongs to M13.
 
 **Exit criteria:** Three separately configured nodes can discover peers, relay
 blocks and votes outward, and bootstrap ledger state from each other on a
