@@ -50,7 +50,7 @@ On the first run, `smallnano` creates the default config automatically, starts
 the node, and tries to open `http://127.0.0.1:<rpc-port>/setup` in your browser.
 After saving the config there, restart the node once to apply the new values.
 
-Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, starts/stops the owned network and RPC workers cleanly, restores/persists known peers with bounded reconnect backoff, and routes inbound `publish`, `vote`, `pull_req`, and `pull_ack` traffic through the node-owned runtime. Final multi-node devnet proof is still pending. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
+Current runtime note: the binary now loads config, initializes the node runtime, bootstraps genesis state, starts/stops the owned network and RPC workers cleanly, restores/persists known peers with bounded reconnect backoff, and routes inbound `publish`, `vote`, `pull_req`, and `pull_ack` traffic through the node-owned runtime. Final multi-node devnet proof is still pending, and autonomous representative mode plus public-network readiness work still sit in later roadmap milestones. See [test-net.md](test-net.md) for the exact three-node bring-up status and remaining blockers.
 
 ## Status
 
@@ -69,8 +69,18 @@ Current runtime note: the binary now loads config, initializes the node runtime,
 | M11 — Node runtime wiring | ✅ Done |
 | M12 — Peer relay & bootstrap config | in progress |
 | M13 — Multi-node devnet validation | pending |
+| M14 — Representative mode & quorum visibility | pending |
+| M15 — Distribution & decentralization readiness | pending |
+| M16 — Production UX & integrations | pending |
+| M17 — Stress testing, spam resistance & performance tuning | pending |
+| M18 — Public network readiness, trust & ecosystem | pending |
 
 See [ROADMAP.md](ROADMAP.md) for full details.
+
+The roadmap now separates technical network completion from broader launch work.
+M13 is the devnet proof milestone. M14-M18 cover representative automation,
+decentralization, user/integration UX, performance hardening, and public-network
+readiness.
 
 ## Architecture
 
@@ -91,7 +101,7 @@ src/
 
 ## Operations
 
-- [test-net.md](test-net.md) — three-machine Windows/macOS/Linux bring-up plan and current runtime blockers
+- [test-net.md](test-net.md) — three-Linux-machine bring-up plan and current runtime blockers
 - [scripts/install.sh](scripts/install.sh) — release installer for packaged binaries
 - [packaging/systemd/smallnano.service](packaging/systemd/smallnano.service) — systemd unit template
 - [.github/workflows/ci.yml](.github/workflows/ci.yml) — formatting and unit-test CI

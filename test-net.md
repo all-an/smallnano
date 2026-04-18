@@ -13,7 +13,7 @@ The idea is:
 5. restart the stack
 6. watch the logs and test local RPC
 
-This is much easier than mixing Windows, macOS, and Linux setup on the first
+This is much easier than coordinating three separate Linux machines on the first
 manual test.
 
 ## What This Guide Is For

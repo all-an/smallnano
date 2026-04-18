@@ -299,22 +299,114 @@ them down cleanly through the same node-owned lifecycle.
 ---
 
 ### Milestone 13 — Multi-Node Devnet Validation
-**Goal:** Prove that smallnano works as a real multi-process cryptocurrency network.
+**Goal:** Prove that smallnano works as a real multi-process cryptocurrency network on a controlled devnet.
 
 Sub-steps:
 1. [ ] Add an end-to-end integration test that launches three node processes and verifies block propagation + confirmation
 2. [ ] Verify wallet send/receive flow across three nodes using the JSON-RPC surface
 3. [ ] Measure idle RSS, sync RSS, disk usage, and confirmation latency against the design targets
-4. [ ] Update `test-net.md` with the final Windows/macOS/Linux manual test procedure and expected results
-5. [ ] Run the three-machine manual devnet: one Windows node, one macOS node, one Linux node
+4. [ ] Update `test-net.md` with the final three-Linux manual test procedure and expected results
+5. [ ] Run the three-machine manual devnet: three Linux nodes
 6. [ ] Fix the remaining cross-platform defects found during the manual run
 7. [ ] Add the three-node integration test to the release gate once it is stable
-8. [ ] Publish the project website with a single-page explainer and download links
-9. [ ] Mark the project release-ready only after the automated and manual devnet tests both pass
+8. [ ] Publish a devnet validation report with measured limits, known gaps, and follow-up work
+9. [ ] Use M13 completion as the gate for a broader public testnet phase, not final release readiness
 
 **Exit criteria:** A three-node devnet can process and confirm transactions
 between separate machines, and both automated and manual tests prove the network
 behaves correctly.
+
+---
+
+### Milestone 14 — Representative Mode & Quorum Visibility
+**Goal:** Implement real representative behavior so voting nodes can autonomously sign, broadcast, and expose consensus state.
+
+Sub-steps:
+1. [ ] Wire `enable_voting` into the node runtime so eligible nodes produce votes for active elections
+2. [ ] Add vote scheduling, deduplication, rebroadcast, and final-vote handling for live elections
+3. [ ] Broadcast locally-generated votes over the existing network relay path
+4. [ ] Track representative liveness, observed online weight, and recent vote participation
+5. [ ] Expose quorum state, active elections, representative health, and confirmation progress over RPC
+6. [ ] Add multi-node tests proving confirmations happen from autonomous representative behavior, not manual vote injection
+7. [ ] Document representative operator requirements, recommended hardware, and failure modes
+
+**Exit criteria:** Multiple nodes with voting enabled can independently produce
+and relay votes, confirmations occur without manual test hooks, and operators
+can inspect quorum health from the node API.
+
+---
+
+### Milestone 15 — Distribution & Decentralization Readiness
+**Goal:** Prove that public-network security is not dominated by one operator, one wallet cluster, or one distribution channel.
+
+Sub-steps:
+1. [ ] Define the public-network distribution plan for genesis custody, faucet reserves, and operational wallets
+2. [ ] Build the faucet / distribution service needed to move supply into real user hands without trusted manual intervention
+3. [ ] Publish representative concentration metrics, delegation distribution, and a simple public decentralization dashboard
+4. [ ] Add RPC and explorer surfaces that let anyone audit supply movement and representative weight
+5. [ ] Define launch thresholds for maximum representative concentration before public mainnet promotion
+6. [ ] Run at least one public test distribution round and publish the resulting concentration data
+7. [ ] Document how users choose, change, and evaluate representatives safely
+
+**Exit criteria:** The project can publicly demonstrate a broad enough supply
+and representative distribution that routine quorum capture by one organisation
+or a very small wallet set is not the default outcome.
+
+---
+
+### Milestone 16 — Production UX & Integrations
+**Goal:** Remove the operator-only rough edges so ordinary users, merchants, and exchanges can use the network reliably.
+
+Sub-steps:
+1. [ ] Add optional auto-receive behavior for wallets and services that do not want manual receive management
+2. [ ] Persist or recover wallet account indexes automatically so restarts do not lose account visibility
+3. [ ] Add wallet recovery/import flows suitable for real end users
+4. [ ] Define and build the indexer / explorer API needed for block, account, pending, and representative visibility
+5. [ ] Add merchant-facing primitives such as payment references, polling/webhook patterns, and settlement examples
+6. [ ] Publish exchange integration guidance for deposits, withdrawals, confirmation tracking, and cold/hot wallet separation
+7. [ ] Build or support at least one mobile/light-client path on top of the node RPC/indexer surfaces
+8. [ ] Update setup, operator, and user docs so common flows do not require reading source code
+
+**Exit criteria:** A normal user can create, recover, send, and receive funds
+without manual ledger repair steps, and third-party integrators have stable
+surfaces for wallets, explorers, merchants, and exchanges.
+
+---
+
+### Milestone 17 — Stress Testing, Spam Resistance & Performance Tuning
+**Goal:** Measure the real operating envelope, then tune or redesign anti-spam and resource controls where the data says they are weak.
+
+Sub-steps:
+1. [ ] Build a multi-node load generator that can exercise publish, receive, vote, and bootstrap traffic at sustained rates
+2. [ ] Measure confirmation latency, throughput, CPU, RAM, and disk across low-end and recommended hardware classes
+3. [ ] Run adversarial tests for send spam, receive spam, pending-table growth, election floods, peer churn, and bootstrap abuse
+4. [ ] Quantify the real cost of CPU work under honest use versus attack use, then retune thresholds if needed
+5. [ ] Add backpressure, admission control, or additional anti-abuse rules where measurements show CPU work alone is insufficient
+6. [ ] Re-run the benchmark and attack matrix after each tuning pass and publish the results
+7. [ ] Lock a documented target envelope for public testnet and a stricter envelope for mainnet promotion
+
+**Exit criteria:** The project has published performance and abuse-resistance
+data, the anti-spam model has been tuned against those results, and operators
+know the expected safe workload envelope.
+
+---
+
+### Milestone 18 — Public Network Readiness, Trust & Ecosystem
+**Goal:** Build the non-protocol foundation required for a credible public network: operational maturity, governance clarity, legal review, and ecosystem support.
+
+Sub-steps:
+1. [ ] Publish release, upgrade, rollback, and incident-response policies for node operators
+2. [ ] Add deterministic release artifacts, signature verification instructions, and stronger operator security guidance
+3. [ ] Publish a threat model covering representative capture, eclipse risk, bootstrap trust, and operational compromise
+4. [ ] Complete legal and regulatory review for the jurisdictions where the project team operates
+5. [ ] Launch a public testnet with published SLAs, support channels, and known-risk disclaimers
+6. [ ] Bring up the first ecosystem integrations: explorer, wallet, merchant pilot, and exchange pilot
+7. [ ] Publish governance and stewardship expectations for protocol changes and emergency coordination
+8. [ ] Mark the project release-ready only after M14-M18 pass with documented evidence
+
+**Exit criteria:** The network is not only technically functional, but also
+operationally supportable, legally reviewed, observable, and trusted enough to
+justify a public mainnet launch.
 
 ---
 
@@ -332,6 +424,11 @@ behaves correctly.
 | M11 (runtime wiring) | ≤ 64 MB idle | ~500 MB |
 | M12 (peer relay + bootstrap config) | ≤ 96 MB peak | ~500 MB |
 | M13 (real multi-node validation) | ≤ 64 MB idle / ≤ 256 MB peak | ≤ 2 GB |
+| M14 (representative mode + visibility) | ≤ 96 MB idle / ≤ 256 MB peak | ≤ 2 GB |
+| M15 (distribution + decentralization tooling) | node budget unchanged; service budget separate | ≤ 2 GB node / service-specific |
+| M16 (production UX + integrations) | node budget unchanged; indexer/explorer budget separate | ≤ 2 GB node / indexer-specific |
+| M17 (stress + anti-spam tuning) | test-dependent; must still converge to ≤ 64 MB idle / ≤ 256 MB peak target | ≤ 2 GB target |
+| M18 (public network readiness) | same public-node target as M17 | ≤ 2 GB target |
 
 ---
 
