@@ -26,6 +26,7 @@ const StateBlock = block_mod.StateBlock;
 const Account = account_mod.Account;
 
 const Key32 = [32]u8;
+const meta_key_max_index = "wallet_max_index";
 
 fn Key32Context(comptime K: type) type {
     return struct {
@@ -224,11 +225,16 @@ pub fn Wallet(comptime StoreType: type) type {
 
         /// Derive account `index`, register it in the wallet map, and return
         /// both the raw public key and its `smn_...` address.
+        ///
+        /// Persists a high-water mark to the store's meta table so the account
+        /// set can be rebuilt automatically on the next startup.
         pub fn derive_account(self: *Self, index: u32) !DerivedAccount {
             const kp = try self.key_pair_at(index);
 
             const gop = try self.account_indexes.getOrPut(kp.public);
             gop.value_ptr.* = index;
+
+            try self.persist_max_index(index);
 
             var address: [64]u8 = undefined;
             Account.from_bytes(&kp.public).to_address(&address);
@@ -238,6 +244,29 @@ pub fn Wallet(comptime StoreType: type) type {
                 .public_key = kp.public,
                 .address = address,
             };
+        }
+
+        /// Re-derive all accounts that were recorded in the store before this
+        /// session. The wallet must already be unlocked by the caller.
+        pub fn restore_accounts(self: *Self) !void {
+            var buf: [12]u8 = undefined;
+            const val = self.store.get_meta(meta_key_max_index, &buf) orelse return;
+            const max_index = std.fmt.parseInt(u32, val, 10) catch return;
+            var i: u32 = 0;
+            while (i <= max_index) : (i += 1) {
+                _ = try self.derive_account(i);
+            }
+        }
+
+        fn persist_max_index(self: *Self, index: u32) !void {
+            var existing_buf: [12]u8 = undefined;
+            if (self.store.get_meta(meta_key_max_index, &existing_buf)) |val| {
+                const existing = std.fmt.parseInt(u32, val, 10) catch 0;
+                if (index <= existing) return;
+            }
+            var buf: [12]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{index}) catch return;
+            try self.store.put_meta(meta_key_max_index, str);
         }
 
         pub fn create_send(
@@ -605,4 +634,84 @@ test "wallet: lock prevents further key usage until unlocked again" {
     try testing.expectError(Wallet(NullStore).WalletError.Locked, wallet.derive_account(1));
     try wallet.unlock("lock-pass");
     _ = try wallet.derive_account(1);
+}
+
+test "wallet: derive_account persists high-water mark and restore_accounts rebuilds map" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+
+    const master_seed = [_]u8{0x88} ** 32;
+    var wallet = try Wallet(NullStore).init_with_thresholds(
+        testing.allocator,
+        &store,
+        &master_seed,
+        "persist-pass",
+        1,
+        1,
+        1,
+    );
+    defer wallet.deinit();
+    try wallet.unlock("persist-pass");
+
+    const a0 = try wallet.derive_account(0);
+    const a3 = try wallet.derive_account(3);
+    wallet.lock();
+
+    // Simulate a restart: clear the in-memory map but keep the store.
+    wallet.account_indexes.clearRetainingCapacity();
+    try testing.expectEqual(@as(usize, 0), wallet.account_indexes.count());
+
+    // restore_accounts should rebuild 0..3 from meta.
+    try wallet.unlock("persist-pass");
+    try wallet.restore_accounts();
+
+    try testing.expectEqual(@as(usize, 4), wallet.account_indexes.count());
+    try testing.expect(wallet.account_indexes.contains(a0.public_key));
+    try testing.expect(wallet.account_indexes.contains(a3.public_key));
+}
+
+test "wallet: restore_accounts is a no-op when no accounts were ever derived" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+
+    const master_seed = [_]u8{0x99} ** 32;
+    var wallet = try Wallet(NullStore).init_with_thresholds(
+        testing.allocator,
+        &store,
+        &master_seed,
+        "fresh-pass",
+        1,
+        1,
+        1,
+    );
+    defer wallet.deinit();
+    try wallet.unlock("fresh-pass");
+    try wallet.restore_accounts();
+
+    try testing.expectEqual(@as(usize, 0), wallet.account_indexes.count());
+}
+
+test "wallet: high-water mark only advances, never retreats" {
+    var store = NullStore.init(testing.allocator);
+    defer store.deinit();
+
+    const master_seed = [_]u8{0xAA} ** 32;
+    var wallet = try Wallet(NullStore).init_with_thresholds(
+        testing.allocator,
+        &store,
+        &master_seed,
+        "hwm-pass",
+        1,
+        1,
+        1,
+    );
+    defer wallet.deinit();
+    try wallet.unlock("hwm-pass");
+
+    _ = try wallet.derive_account(5);
+    _ = try wallet.derive_account(2); // lower index — must not lower the watermark
+
+    var buf: [12]u8 = undefined;
+    const stored = store.get_meta(meta_key_max_index, &buf).?;
+    try testing.expectEqualStrings("5", stored);
 }

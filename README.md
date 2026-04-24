@@ -65,9 +65,9 @@ Current runtime note: the binary now loads config, initializes the node runtime,
 | M7 — Wallet & key management | module-complete, integration pending |
 | M8 — JSON-RPC API | module-complete, integration pending |
 | M9 — Configuration & CLI | config complete, multi-node validation pending |
-| M10 — Hardening & CI | in progress |
+| M10 — Hardening & CI | ✅ Done |
 | M11 — Node runtime wiring | ✅ Done |
-| M12 — Peer relay & bootstrap config | in progress |
+| M12 — Peer relay & bootstrap config | ✅ Done |
 | M13 — Multi-node devnet validation | pending |
 | M14 — Representative mode & quorum visibility | pending |
 | M15 — Distribution & decentralization readiness | pending |

@@ -141,6 +141,7 @@ pub fn Node(comptime StoreType: type) type {
                 self.config.work_threads,
             );
             errdefer self.wallet.deinit();
+            try restore_wallet_accounts(&self.wallet, wallet_password);
 
             self.rpc_handlers = RpcHandlersType.init(
                 allocator,
@@ -491,6 +492,15 @@ fn load_or_create_wallet(
     const hex = std.fmt.bytesToHex(bytes, .lower);
     try store.put_meta(meta_key_wallet_storage, &hex);
     return wallet;
+}
+
+fn restore_wallet_accounts(
+    wallet: anytype,
+    password: []const u8,
+) !void {
+    try wallet.unlock(password);
+    defer wallet.lock();
+    try wallet.restore_accounts();
 }
 
 fn mbps_to_bytes_per_sec(limit_mbps: u32) u64 {
